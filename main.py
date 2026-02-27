@@ -961,6 +961,8 @@ def main() -> None:
     app.add_handler(CommandHandler("setchannel", setchannel_cmd))
     app.add_handler(CommandHandler("addfeed", addfeed_cmd))
     app.add_handler(CommandHandler("feeds", feeds_cmd))
+    app.add_handler(CommandHandler("delfeed", delfeed_cmd))
+    app.add_handler(CommandHandler("clearfeeds", clearfeeds_cmd))
 
     # posting
     app.add_handler(CommandHandler("previewonce", previewonce_cmd))
@@ -979,4 +981,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
