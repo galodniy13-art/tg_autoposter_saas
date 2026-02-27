@@ -595,6 +595,40 @@ async def feeds_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await update.message.reply_text("🧾 Feeds:\n" + "\n".join([f"{i+1}) {u}" for i, u in enumerate(feeds)]))
+async def delfeed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    cfg = load_client(user_id)
+    feeds = cfg.get("feeds", [])
+
+    if not feeds:
+        await update.message.reply_text("No feeds to delete.")
+        return
+
+    if not context.args:
+        await update.message.reply_text("Usage: /delfeed <number>. Example: /delfeed 1")
+        return
+
+    try:
+        idx = int(context.args[0]) - 1
+    except ValueError:
+        await update.message.reply_text("Usage: /delfeed <number>. Example: /delfeed 1")
+        return
+
+    if idx < 0 or idx >= len(feeds):
+        await update.message.reply_text(f"Wrong number. Use 1..{len(feeds)} (see /feeds).")
+        return
+
+    removed = feeds.pop(idx)
+    cfg["feeds"] = feeds
+    save_client(user_id, cfg)
+    await update.message.reply_text(f"✅ Deleted feed:\n{removed}\n\nRemaining: {len(feeds)}")
+
+async def clearfeeds_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    cfg = load_client(user_id)
+    cfg["feeds"] = []
+    save_client(user_id, cfg)
+    await update.message.reply_text("✅ All feeds removed.")
 
 async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -945,3 +979,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
