@@ -1,0 +1,16 @@
+{
+  "channel": null,
+  "feeds": [],
+  "posted_urls": [],
+  "autopost_enabled": false,
+  "interval_minutes": 20,
+  "daily_limit": 5,
+  "daily_count": 0,
+  "daily_date": "2026-02-24",
+  "max_dedupe": 1500,
+  "fetch_entries_per_feed": 15,
+  "language": null,
+  "style_file": "default_ru.txt",
+  "custom_style_file": null,
+  "subscription_until": null
+}

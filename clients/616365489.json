@@ -1,0 +1,27 @@
+{
+  "channel": "@autopost_test_amet",
+  "feeds": [
+    "https://feeds.bbci.co.uk/sport/football/rss.xml"
+  ],
+  "posted_urls": [
+    "https://www.bbc.com/sport/football/articles/cy4wdwqg80no",
+    "https://www.bbc.com/sport/football/articles/clyxrxj5n8yo",
+    "https://www.bbc.com/sport/football/articles/cre0v1x8nlvo",
+    "https://www.bbc.com/sport/football/articles/cze0r6zw2e6o",
+    "https://www.bbc.com/sport/football/articles/c0rj7jd1jdro",
+    "https://www.bbc.com/sport/football/articles/cx24x48232vo",
+    "https://www.bbc.com/sport/football/articles/c9wnyj7p05vo",
+    "https://www.bbc.com/sport/football/articles/cy038lz7088o"
+  ],
+  "autopost_enabled": true,
+  "interval_minutes": 20,
+  "daily_limit": 100,
+  "daily_count": 8,
+  "daily_date": "2026-02-24",
+  "max_dedupe": 1500,
+  "fetch_entries_per_feed": 15,
+  "style_file": "default_ru.txt",
+  "custom_style_file": "616365489_style.txt",
+  "subscription_until": "2026-03-11",
+  "language": "en"
+}
