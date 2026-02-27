@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.constants import ChatMemberStatus
 from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import CallbackQueryHandler
 
 # ===================== Paths / Env =====================
 BASE_DIR = Path(__file__).parent
@@ -56,6 +58,26 @@ DEFAULT_STYLE_FILE = "default_ru.txt"
 # ===================== Texts (EN/RU) =====================
 TEXTS = {
     "en": {
+        "menu_title": "✅ Menu. Choose what you want to do:",
+"setup_check": (
+    "⚙️ Setup checklist:\n\n"
+    "1) Channel connected?\n"
+    "   Use: /setchannel @yourchannel\n\n"
+    "2) Mode chosen?\n"
+    "   /mode rss  or  /mode creator\n\n"
+    "3) RSS mode: feeds added?\n"
+    "   /addfeed https://site.com/rss\n\n"
+    "4) Style set?\n"
+    "   /setstyle <paste your style prompt>\n\n"
+    "5) Test preview:\n"
+    "   /previewonce\n\n"
+    "6) Paid posting:\n"
+    "   Ask admin to activate, then /fetchonce or /autoposton"
+),
+"ui_addfeed": "Paste your RSS link like:\n/addfeed https://site.com/rss",
+"ui_setchannel": "Type your channel username like:\n/setchannel @yourchannel\n\nBot must be admin in the channel.",
+"ui_setstyle": "Paste your style prompt like:\n/setstyle <your text>\n\nExample: language, tone, length, emojis, forbidden topics.",
+"ui_pay": "Payment / activation:\n{pay}",
         "choose_lang": (
             "👋 Hi! Choose your language.\n\n"
             "✅ Tap one option below and the language will be set automatically:\n"
@@ -94,6 +116,26 @@ TEXTS = {
         "admin_only": "Admin only.",
     },
     "ru": {
+        "menu_title": "✅ Меню. Выберите действие:",
+"setup_check": (
+    "⚙️ Чеклист настройки:\n\n"
+    "1) Канал подключён?\n"
+    "   /setchannel @вашканал\n\n"
+    "2) Режим выбран?\n"
+    "   /mode rss  или  /mode creator\n\n"
+    "3) RSS-режим: ленты добавлены?\n"
+    "   /addfeed https://site.com/rss\n\n"
+    "4) Стиль задан?\n"
+    "   /setstyle <вставьте prompt>\n\n"
+    "5) Тест превью:\n"
+    "   /previewonce\n\n"
+    "6) Публикации (платно):\n"
+    "   Активация админом, потом /fetchonce или /autoposton"
+),
+"ui_addfeed": "Вставьте RSS ссылку так:\n/addfeed https://site.com/rss",
+"ui_setchannel": "Напишите юзернейм канала так:\n/setchannel @вашканал\n\nБот должен быть админом канала.",
+"ui_setstyle": "Вставьте prompt стиля так:\n/setstyle <ваш текст>\n\nПример: язык, тон, длина, эмодзи, запреты.",
+"ui_pay": "Оплата / активация:\n{pay}",
         "choose_lang": (
             "👋 Привет! Выберите язык.\n\n"
             "✅ Нажмите на вариант ниже, язык установится автоматически:\n"
@@ -431,6 +473,35 @@ def creator_make_post(user_id: int, cfg: dict) -> str:
     data = r.json()
     return clean_text(data.get("response", ""))[:900]
 
+def build_main_menu(cfg: dict) -> InlineKeyboardMarkup:
+    # Small, phone-friendly rows
+    keyboard = [
+        [InlineKeyboardButton("🌍 Language / Язык", callback_data="ui:lang")],
+        [InlineKeyboardButton("⚙️ Setup / Настройка", callback_data="ui:setup")],
+        [InlineKeyboardButton("📌 Set channel", callback_data="ui:setchannel"),
+         InlineKeyboardButton("🧾 Add feed", callback_data="ui:addfeed")],
+        [InlineKeyboardButton("✍️ Set style", callback_data="ui:setstyle"),
+         InlineKeyboardButton("🧪 Preview", callback_data="ui:preview")],
+        [InlineKeyboardButton("🚀 Post now", callback_data="ui:fetchonce")],
+        [InlineKeyboardButton("🤖 Autopost ON", callback_data="ui:autoposton"),
+         InlineKeyboardButton("🛑 OFF", callback_data="ui:autopostoff")],
+        [InlineKeyboardButton("💳 Payment", callback_data="ui:pay"),
+         InlineKeyboardButton("ℹ️ Status", callback_data="ui:status")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+async def send_menu(update: Update, cfg: dict, text: str) -> None:
+    # Works for both message and button clicks
+    markup = build_main_menu(cfg)
+
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text(text=text, reply_markup=markup)
+        return
+
+    await update.message.reply_text(text=text, reply_markup=markup)
+
 # ===================== Commands =====================
 async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -457,7 +528,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(TEXTS["en"]["choose_lang"])
         return
 
-    await update.message.reply_text(tr(cfg, "start_ready") + "\n\n" + pay_line(cfg))
+    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(cfg))
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -476,6 +547,86 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"💳 Subscription until: {sub}\n"
         f"🧠 LLM_PROVIDER: {LLM_PROVIDER}"
     )
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    cfg = load_client(user_id)
+
+    if not cfg.get("language"):
+        await update.message.reply_text(TEXTS["en"]["choose_lang"])
+        return
+
+    await send_menu(update, cfg, tr(cfg, "menu_title"))
+
+async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    q = update.callback_query
+    user_id = q.from_user.id
+    cfg = load_client(user_id)
+
+    data = q.data or ""
+
+    if data == "ui:lang":
+        await send_menu(update, cfg, tr(cfg, "choose_lang"))
+        return
+
+    if data == "ui:setup":
+        await send_menu(update, cfg, tr(cfg, "setup_check"))
+        return
+
+    if data == "ui:setchannel":
+        await send_menu(update, cfg, tr(cfg, "ui_setchannel"))
+        return
+
+    if data == "ui:addfeed":
+        await send_menu(update, cfg, tr(cfg, "ui_addfeed"))
+        return
+
+    if data == "ui:setstyle":
+        await send_menu(update, cfg, tr(cfg, "ui_setstyle"))
+        return
+
+    if data == "ui:pay":
+        await send_menu(update, cfg, tr(cfg, "ui_pay").format(pay=pay_line(cfg)))
+        return
+
+    if data == "ui:status":
+        # reuse /status output
+        await q.answer()
+        # call status_cmd with the same update/context
+        await status_cmd(update, context)
+        return
+
+    if data == "ui:preview":
+        await q.answer()
+        await previewonce_cmd(update, context)
+        return
+
+    if data == "ui:fetchonce":
+        await q.answer()
+        await fetchonce_cmd(update, context)
+        return
+
+    if data == "ui:autoposton":
+        await q.answer()
+        await autoposton_cmd(update, context)
+        return
+
+    if data == "ui:autopostoff":
+        await q.answer()
+        await autopostoff_cmd(update, context)
+        return
+
+    await q.answer()
+
+async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    cfg = load_client(user_id)
+
+    if not cfg.get("language"):
+        await update.message.reply_text(TEXTS["en"]["choose_lang"])
+        return
+
+    await send_menu(update, cfg, tr(cfg, "setup_check"))
 
 async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -953,6 +1104,9 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("lang", lang_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("setup", setup_cmd))
+    app.add_handler(CallbackQueryHandler(ui_callback))
 
     # setup
     app.add_handler(CommandHandler("mode", mode_cmd))
@@ -981,5 +1135,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
