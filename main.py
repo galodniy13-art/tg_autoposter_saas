@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 from telegram import Update
 from telegram.constants import ChatMemberStatus
+from telegram.error import BadRequest
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler
@@ -520,16 +521,33 @@ def build_main_menu(cfg: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
-async def send_menu(update: Update, cfg: dict, text: str) -> None:
-    # Works for both message and button clicks
-    markup = build_main_menu(cfg)
+def build_lang_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🇬🇧 English", callback_data="ui:setlang:en")],
+            [InlineKeyboardButton("🇷🇺 Русский", callback_data="ui:setlang:ru")],
+        ]
+    )
+
+
+async def reply_ui(update: Update, text: str, cfg: dict, show_menu: bool = True) -> None:
+    markup = build_main_menu(cfg) if show_menu else None
 
     if update.callback_query:
-        await update.callback_query.answer()
-        await update.callback_query.edit_message_text(text=text, reply_markup=markup)
+        q = update.callback_query
+        await q.answer()
+        try:
+            await q.edit_message_text(text=text, reply_markup=markup)
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=markup)
         return
 
-    await update.message.reply_text(text=text, reply_markup=markup)
+    if update.message:
+        await update.message.reply_text(text=text, reply_markup=markup)
+
+
+async def send_menu(update: Update, cfg: dict, text: str) -> None:
+    await reply_ui(update, text, cfg, show_menu=True)
 
 # ===================== Commands =====================
 async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -537,24 +555,24 @@ async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = load_client(user_id)
 
     if not context.args:
-        await update.message.reply_text(TEXTS["en"]["choose_lang"])
+        await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
         return
 
     choice = context.args[0].strip().lower()
     if choice not in ("en", "ru"):
-        await update.message.reply_text(TEXTS["en"]["choose_lang"])
+        await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
         return
 
     cfg["language"] = choice
     save_client(user_id, cfg)
-    await update.message.reply_text(tr(cfg, "lang_set") + "\n\n" + tr(cfg, "start_ready") + "\n\n" + pay_line(cfg))
+    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(cfg))
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
 
     if not cfg.get("language"):
-        await update.message.reply_text(TEXTS["en"]["choose_lang"])
+        await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
         return
 
     await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(cfg))
@@ -564,7 +582,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     cfg = ensure_daily_counter(load_client(user_id))
     sub = cfg.get("subscription_until") or "inactive"
 
-    await update.message.reply_text(
+    text = (
         f"👤 Your ID: {user_id}\n"
         f"🌍 Lang: {cfg.get('language')}\n"
         f"🧩 Mode: {cfg.get('mode')}\n"
@@ -576,16 +594,17 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"💳 Subscription until: {sub}\n"
         f"🧠 LLM_PROVIDER: {LLM_PROVIDER}"
     )
+    await reply_ui(update, text, cfg, show_menu=True)
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
 
     if not cfg.get("language"):
-        await update.message.reply_text(TEXTS["en"]["choose_lang"])
+        await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
         return
 
-    await send_menu(update, cfg, tr(cfg, "menu_title"))
+    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(cfg))
 
 async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
@@ -595,7 +614,18 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     data = q.data or ""
 
     if data == "ui:lang":
-        await send_menu(update, cfg, tr(cfg, "choose_lang"))
+        await q.answer()
+        await q.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
+        return
+
+    if data.startswith("ui:setlang:"):
+        choice = data.split(":", 2)[2].strip().lower()
+        if choice in ("en", "ru"):
+            cfg["language"] = choice
+            save_client(user_id, cfg)
+            await reply_ui(update, tr(cfg, "lang_set") + "\n\n" + tr(cfg, "menu_title") + "\n\n" + pay_line(cfg), cfg, show_menu=True)
+            return
+        await q.answer()
         return
 
     if data == "ui:setup":
@@ -619,29 +649,22 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:status":
-        # reuse /status output
-        await q.answer()
-        # call status_cmd with the same update/context
         await status_cmd(update, context)
         return
 
     if data == "ui:preview":
-        await q.answer()
         await previewonce_cmd(update, context)
         return
 
     if data == "ui:fetchonce":
-        await q.answer()
         await fetchonce_cmd(update, context)
         return
 
     if data == "ui:autoposton":
-        await q.answer()
         await autoposton_cmd(update, context)
         return
 
     if data == "ui:autopostoff":
-        await q.answer()
         await autopostoff_cmd(update, context)
         return
 
@@ -652,7 +675,7 @@ async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = load_client(user_id)
 
     if not cfg.get("language"):
-        await update.message.reply_text(TEXTS["en"]["choose_lang"])
+        await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
         return
 
     await send_menu(update, cfg, tr(cfg, "setup_check"))
@@ -740,6 +763,36 @@ async def setchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     save_client(user_id, cfg)
     await update.message.reply_text(f"✅ Channel saved: {channel}")
 
+async def unsetchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    cfg = load_client(user_id)
+    cfg["channel"] = None
+    save_client(user_id, cfg)
+    await update.message.reply_text("✅ Channel cleared.")
+
+
+async def showstyle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    cfg = load_client(user_id)
+    cpath = custom_style_path(user_id)
+
+    if cpath.exists() and cpath.read_text(encoding="utf-8", errors="ignore").strip():
+        style_name = "custom"
+    else:
+        style_name = cfg.get("style_file") or DEFAULT_STYLE_FILE
+
+    style = get_style_prompt(user_id, cfg)
+    await update.message.reply_text(f"✍️ Current style ({style_name}):\n\n{style[:3500]}")
+
+
+async def resetstyle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    cpath = custom_style_path(user_id)
+    if cpath.exists():
+        cpath.unlink()
+    await update.message.reply_text("✅ Custom style reset. Default style is active.")
+
+
 async def addfeed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
@@ -816,43 +869,43 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if cfg.get("mode") == "creator":
         msg = creator_make_post(user_id, cfg)
-        await update.message.reply_text("🧪 Preview:\n\n" + msg)
+        await reply_ui(update, "🧪 Preview:\n\n" + msg, cfg, show_menu=True)
         return
 
     channel = cfg.get("channel")
     feeds = cfg.get("feeds", [])
     if not channel:
-        await update.message.reply_text("Channel not set. Use /setchannel @channelusername")
+        await reply_ui(update, "Channel not set. Use /setchannel @channelusername", cfg, show_menu=True)
         return
     if not feeds:
-        await update.message.reply_text("No feeds. Add one: /addfeed <url>")
+        await reply_ui(update, "No feeds. Add one: /addfeed <url>", cfg, show_menu=True)
         return
 
     best = pick_newest_unseen(cfg)
     if not best:
-        await update.message.reply_text("No new items found (or everything already posted).")
+        await reply_ui(update, "No new items found (or everything already posted).", cfg, show_menu=True)
         return
 
     _, title, link, src = best
     summary = extract_summary_for_link(src, link)
     msg = llm_generate_post(user_id, cfg, title, summary, link)
-    await update.message.reply_text("🧪 Preview:\n\n" + msg)
+    await reply_ui(update, "🧪 Preview:\n\n" + msg, cfg, show_menu=True)
 
 async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
 
     if not subscription_ok(cfg):
-        await update.message.reply_text(tr(cfg, "sub_inactive") + "\n" + pay_line(cfg))
+        await reply_ui(update, tr(cfg, "sub_inactive") + "\n" + pay_line(cfg), cfg, show_menu=True)
         return
 
     if not can_post_more(cfg):
-        await update.message.reply_text("Daily limit reached.")
+        await reply_ui(update, "Daily limit reached.", cfg, show_menu=True)
         return
 
     channel = cfg.get("channel")
     if not channel:
-        await update.message.reply_text("Channel not set. Use /setchannel @channelusername")
+        await reply_ui(update, "Channel not set. Use /setchannel @channelusername", cfg, show_menu=True)
         return
 
     if cfg.get("mode") == "creator":
@@ -860,17 +913,17 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await context.bot.send_message(chat_id=channel, text=msg)
         bump_daily_count(cfg)
         save_client(user_id, cfg)
-        await update.message.reply_text("✅ Posted 1 creator post.")
+        await reply_ui(update, "✅ Posted 1 creator post.", cfg, show_menu=True)
         return
 
     feeds = cfg.get("feeds", [])
     if not feeds:
-        await update.message.reply_text("No feeds. Add one: /addfeed <url>")
+        await reply_ui(update, "No feeds. Add one: /addfeed <url>", cfg, show_menu=True)
         return
 
     best = pick_newest_unseen(cfg)
     if not best:
-        await update.message.reply_text("No new items found (or everything already posted).")
+        await reply_ui(update, "No new items found (or everything already posted).", cfg, show_menu=True)
         return
 
     _, title, link, src = best
@@ -884,7 +937,7 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     cfg["posted_urls"] = cfg["posted_urls"][-int(cfg.get("max_dedupe", 1500)):]
     bump_daily_count(cfg)
     save_client(user_id, cfg)
-    await update.message.reply_text("✅ Posted 1 item.")
+    await reply_ui(update, "✅ Posted 1 item.", cfg, show_menu=True)
 
 async def interval_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -911,14 +964,14 @@ async def autoposton_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     cfg = load_client(user_id)
     cfg["autopost_enabled"] = True
     save_client(user_id, cfg)
-    await update.message.reply_text("🤖 Autopost ON.")
+    await reply_ui(update, "🤖 Autopost ON.", cfg, show_menu=True)
 
 async def autopostoff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
     cfg["autopost_enabled"] = False
     save_client(user_id, cfg)
-    await update.message.reply_text("🛑 Autopost OFF.")
+    await reply_ui(update, "🛑 Autopost OFF.", cfg, show_menu=True)
 
 # ===================== Admin commands =====================
 async def activate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1141,7 +1194,10 @@ def main() -> None:
     app.add_handler(CommandHandler("mode", mode_cmd))
     app.add_handler(CommandHandler("setprofile", setprofile_cmd))
     app.add_handler(CommandHandler("setstyle", setstyle_cmd))
+    app.add_handler(CommandHandler("showstyle", showstyle_cmd))
+    app.add_handler(CommandHandler("resetstyle", resetstyle_cmd))
     app.add_handler(CommandHandler("setchannel", setchannel_cmd))
+    app.add_handler(CommandHandler("unsetchannel", unsetchannel_cmd))
     app.add_handler(CommandHandler("addfeed", addfeed_cmd))
     app.add_handler(CommandHandler("feeds", feeds_cmd))
     app.add_handler(CommandHandler("delfeed", delfeed_cmd))
@@ -1164,7 +1220,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
 
 
