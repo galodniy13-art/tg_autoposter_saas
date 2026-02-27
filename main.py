@@ -58,6 +58,17 @@ DEFAULT_STYLE_FILE = "default_ru.txt"
 # ===================== Texts (EN/RU) =====================
 TEXTS = {
     "en": {
+        "btn_lang": "🌍 Language / Язык",
+"btn_setup": "⚙️ Setup",
+"btn_setchannel": "📌 Set channel",
+"btn_addfeed": "🧾 Add feed",
+"btn_setstyle": "✍️ Set style",
+"btn_preview": "🧪 Preview",
+"btn_post": "🚀 Post now",
+"btn_on": "🤖 Autopost ON",
+"btn_off": "🛑 OFF",
+"btn_pay": "💳 Payment",
+"btn_status": "ℹ️ Status",
         "menu_title": "✅ Menu. Choose what you want to do:",
 "setup_check": (
     "⚙️ Setup checklist:\n\n"
@@ -116,6 +127,17 @@ TEXTS = {
         "admin_only": "Admin only.",
     },
     "ru": {
+        "btn_lang": "🌍 Язык",
+"btn_setup": "⚙️ Настройка",
+"btn_setchannel": "📌 Канал",
+"btn_addfeed": "🧾 Лента (RSS)",
+"btn_setstyle": "✍️ Стиль",
+"btn_preview": "🧪 Превью",
+"btn_post": "🚀 Опубликовать",
+"btn_on": "🤖 Автопост ВКЛ",
+"btn_off": "🛑 ВЫКЛ",
+"btn_pay": "💳 Оплата",
+"btn_status": "ℹ️ Статус",
         "menu_title": "✅ Меню. Выберите действие:",
 "setup_check": (
     "⚙️ Чеклист настройки:\n\n"
@@ -474,19 +496,26 @@ def creator_make_post(user_id: int, cfg: dict) -> str:
     return clean_text(data.get("response", ""))[:900]
 
 def build_main_menu(cfg: dict) -> InlineKeyboardMarkup:
-    # Small, phone-friendly rows
     keyboard = [
-        [InlineKeyboardButton("🌍 Language / Язык", callback_data="ui:lang")],
-        [InlineKeyboardButton("⚙️ Setup / Настройка", callback_data="ui:setup")],
-        [InlineKeyboardButton("📌 Set channel", callback_data="ui:setchannel"),
-         InlineKeyboardButton("🧾 Add feed", callback_data="ui:addfeed")],
-        [InlineKeyboardButton("✍️ Set style", callback_data="ui:setstyle"),
-         InlineKeyboardButton("🧪 Preview", callback_data="ui:preview")],
-        [InlineKeyboardButton("🚀 Post now", callback_data="ui:fetchonce")],
-        [InlineKeyboardButton("🤖 Autopost ON", callback_data="ui:autoposton"),
-         InlineKeyboardButton("🛑 OFF", callback_data="ui:autopostoff")],
-        [InlineKeyboardButton("💳 Payment", callback_data="ui:pay"),
-         InlineKeyboardButton("ℹ️ Status", callback_data="ui:status")],
+        [InlineKeyboardButton(tr(cfg, "btn_lang"), callback_data="ui:lang")],
+        [InlineKeyboardButton(tr(cfg, "btn_setup"), callback_data="ui:setup")],
+        [
+            InlineKeyboardButton(tr(cfg, "btn_setchannel"), callback_data="ui:setchannel"),
+            InlineKeyboardButton(tr(cfg, "btn_addfeed"), callback_data="ui:addfeed"),
+        ],
+        [
+            InlineKeyboardButton(tr(cfg, "btn_setstyle"), callback_data="ui:setstyle"),
+            InlineKeyboardButton(tr(cfg, "btn_preview"), callback_data="ui:preview"),
+        ],
+        [InlineKeyboardButton(tr(cfg, "btn_post"), callback_data="ui:fetchonce")],
+        [
+            InlineKeyboardButton(tr(cfg, "btn_on"), callback_data="ui:autoposton"),
+            InlineKeyboardButton(tr(cfg, "btn_off"), callback_data="ui:autopostoff"),
+        ],
+        [
+            InlineKeyboardButton(tr(cfg, "btn_pay"), callback_data="ui:pay"),
+            InlineKeyboardButton(tr(cfg, "btn_status"), callback_data="ui:status"),
+        ],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -1135,6 +1164,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
