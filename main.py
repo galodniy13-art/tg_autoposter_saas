@@ -795,7 +795,7 @@ async def setstyle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     style = parts[1].strip()
     custom_style_path(user_id).write_text(style, encoding="utf-8")
     save_client(user_id, cfg)
-    await update.message.reply_text("✅ Style updated (previous style replaced).")
+    await send_menu(update, cfg, "✅ Style updated (previous style replaced).")
 
 async def setchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
