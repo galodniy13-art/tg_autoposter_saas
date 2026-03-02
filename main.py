@@ -79,6 +79,7 @@ TEXTS = {
 "btn_showstyle": "📄 Show style",
 "btn_resetstyle": "♻️ Reset style",
 "btn_unsetchannel": "🧹 Unset channel",
+"btn_materials": "📚 Materials",
         "menu_title": "✅ Menu. Choose what you want to do:",
 "setup_check": (
     "⚙️ Setup checklist:\n\n"
@@ -100,6 +101,7 @@ TEXTS = {
 "ui_setstyle": "Paste your style prompt like:\n/setstyle <your text>\n\nExample: language, tone, length, emojis, forbidden topics.",
 "ui_pay": "Payment / activation:\n{pay}",
 "ui_schedule": "Schedule:\n{schedule}\n\nCommands:\n/schedule\n/schedule add 09:00\n/schedule remove 09:00\n/schedule clear\n/schedule on\n/schedule off",
+"ui_materials": "📚 Useful materials:\n• Prompt guide (RU): https://telegra.ph/Instrukciya-po-polzovaniyu-botom-i-poleznye-materialy-02-27\n• RSS feed ideas (EN): https://rss.app/new-rss-feed/create-twitter-rss-feed",
         "choose_lang": (
             "👋 Hi! Choose your language.\n\n"
             "✅ Tap one option below and the language will be set automatically:\n"
@@ -153,6 +155,7 @@ TEXTS = {
 "btn_showstyle": "📄 Показать стиль",
 "btn_resetstyle": "♻️ Сбросить стиль",
 "btn_unsetchannel": "🧹 Отключить канал",
+"btn_materials": "📚 Материалы",
         "menu_title": "✅ Меню. Выберите действие:",
 "setup_check": (
     "⚙️ Чеклист настройки:\n\n"
@@ -174,6 +177,7 @@ TEXTS = {
 "ui_setstyle": "Вставьте prompt стиля так:\n/setstyle <ваш текст>\n\nПример: язык, тон, длина, эмодзи, запреты.",
 "ui_pay": "Оплата / активация:\n{pay}",
 "ui_schedule": "Расписание:\n{schedule}\n\nКоманды:\n/schedule\n/schedule add 09:00\n/schedule remove 09:00\n/schedule clear\n/schedule on\n/schedule off",
+"ui_materials": "📚 Полезные материалы:\n• Инструкция и создание промптов (RU): https://telegra.ph/Instrukciya-po-polzovaniyu-botom-i-poleznye-materialy-02-27\n• Идеи RSS-лент (EN): https://rss.app/new-rss-feed/create-twitter-rss-feed",
         "choose_lang": (
             "👋 Привет! Выберите язык.\n\n"
             "✅ Нажмите на вариант ниже, язык установится автоматически:\n"
@@ -546,6 +550,7 @@ def build_main_menu(cfg: dict) -> InlineKeyboardMarkup:
             InlineKeyboardButton(tr(cfg, "btn_pay"), callback_data="ui:pay"),
             InlineKeyboardButton(tr(cfg, "btn_status"), callback_data="ui:status"),
         ],
+        [InlineKeyboardButton(tr(cfg, "btn_materials"), callback_data="ui:materials")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -591,6 +596,22 @@ def schedule_summary(cfg: dict) -> str:
     times = cfg.get("schedule_times", [])
     times_text = ", ".join(times) if times else "(empty)"
     return f"Status: {enabled}\nTimes: {times_text}"
+
+
+def feeds_overview(cfg: dict) -> str:
+    feeds = cfg.get("feeds", [])
+    if not feeds:
+        return "No feeds. Add one: /addfeed <url>"
+    return "🧾 Feeds:\n" + "\n".join([f"{i+1}) {u}" for i, u in enumerate(feeds)])
+
+
+def build_feeds_menu(cfg: dict) -> InlineKeyboardMarkup:
+    rows = []
+    for idx, url in enumerate(cfg.get("feeds", []), start=1):
+        short = (url[:28] + "…") if len(url) > 29 else url
+        rows.append([InlineKeyboardButton(f"❌ {idx}", callback_data=f"ui:delfeed:{idx}"), InlineKeyboardButton(short, callback_data="ui:addfeed")])
+    rows.append([InlineKeyboardButton("➕ " + tr(cfg, "btn_addfeed"), callback_data="ui:addfeed")])
+    return InlineKeyboardMarkup(rows)
 
 # ===================== Commands =====================
 async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -640,6 +661,12 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
     await reply_ui(update, text, cfg, show_menu=True)
 
+async def materials_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    cfg = load_client(user_id)
+    await send_menu(update, cfg, tr(cfg, "ui_materials"))
+
+
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
@@ -681,7 +708,12 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:addfeed":
-        await send_menu(update, cfg, tr(cfg, "ui_addfeed"))
+        text = tr(cfg, "ui_addfeed") + "\n\n" + feeds_overview(cfg)
+        try:
+            await q.answer()
+            await q.edit_message_text(text=text, reply_markup=build_feeds_menu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_feeds_menu(cfg))
         return
 
     if data == "ui:unsetchannel":
@@ -717,6 +749,27 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data == "ui:pay":
         await send_menu(update, cfg, tr(cfg, "ui_pay").format(pay=pay_line(cfg)))
+        return
+
+    if data == "ui:materials":
+        await send_menu(update, cfg, tr(cfg, "ui_materials"))
+        return
+
+    if data.startswith("ui:delfeed:"):
+        raw_idx = data.split(":", 2)[2]
+        try:
+            idx = int(raw_idx) - 1
+        except ValueError:
+            await send_menu(update, cfg, "Wrong feed index.")
+            return
+        feeds = cfg.get("feeds", [])
+        if idx < 0 or idx >= len(feeds):
+            await send_menu(update, cfg, "Wrong feed index.")
+            return
+        removed = feeds.pop(idx)
+        cfg["feeds"] = feeds
+        save_client(user_id, cfg)
+        await send_menu(update, cfg, f"✅ Deleted feed:\n{removed}\n\n{feeds_overview(cfg)}")
         return
 
     if data == "ui:status":
@@ -756,12 +809,12 @@ async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = load_client(user_id)
 
     if not context.args:
-        await update.message.reply_text("Usage: /mode rss OR /mode creator")
+        await update.message.reply_text("Usage: /mode rss OR /mode creator OR /mode both")
         return
 
     m = context.args[0].strip().lower()
-    if m not in ("rss", "creator"):
-        await update.message.reply_text("Usage: /mode rss OR /mode creator")
+    if m not in ("rss", "creator", "both"):
+        await update.message.reply_text("Usage: /mode rss OR /mode creator OR /mode both")
         return
 
     cfg["mode"] = m
@@ -1055,13 +1108,23 @@ async def addfeed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def feeds_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
+    text = feeds_overview(cfg)
     feeds = cfg.get("feeds", [])
 
     if not feeds:
-        await update.message.reply_text("No feeds. Add one: /addfeed <url>")
+        await send_menu(update, cfg, text)
         return
 
-    await update.message.reply_text("🧾 Feeds:\n" + "\n".join([f"{i+1}) {u}" for i, u in enumerate(feeds)]))
+    if update.callback_query:
+        q = update.callback_query
+        await q.answer()
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_feeds_menu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_feeds_menu(cfg))
+        return
+
+    await update.message.reply_text(text, reply_markup=build_feeds_menu(cfg))
 async def delfeed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
@@ -1088,7 +1151,7 @@ async def delfeed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     removed = feeds.pop(idx)
     cfg["feeds"] = feeds
     save_client(user_id, cfg)
-    await update.message.reply_text(f"✅ Deleted feed:\n{removed}\n\nRemaining: {len(feeds)}")
+    await send_menu(update, cfg, f"✅ Deleted feed:\n{removed}\n\n{feeds_overview(cfg)}")
 
 async def clearfeeds_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -1100,8 +1163,9 @@ async def clearfeeds_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
+    mode = cfg.get("mode")
 
-    if cfg.get("mode") == "creator":
+    if mode == "creator":
         msg = creator_make_post(user_id, cfg)
         await reply_ui(update, "🧪 Preview:\n\n" + msg, cfg, show_menu=True)
         return
@@ -1111,6 +1175,22 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not channel:
         await reply_ui(update, "Channel not set. Use /setchannel @channelusername", cfg, show_menu=True)
         return
+
+    if mode == "both":
+        creator_msg = creator_make_post(user_id, cfg)
+        if not feeds:
+            await reply_ui(update, "🧪 Preview (creator):\n\n" + creator_msg, cfg, show_menu=True)
+            return
+        best = pick_newest_unseen(cfg)
+        if not best:
+            await reply_ui(update, "🧪 Preview (creator):\n\n" + creator_msg, cfg, show_menu=True)
+            return
+        _, title, link, src = best
+        summary = extract_summary_for_link(src, link)
+        rss_msg = llm_generate_post(user_id, cfg, title, summary, link)
+        await reply_ui(update, "🧪 Preview (RSS):\n\n" + rss_msg + "\n\n————\n🧪 Preview (Creator):\n\n" + creator_msg, cfg, show_menu=True)
+        return
+
     if not feeds:
         await reply_ui(update, "No feeds. Add one: /addfeed <url>", cfg, show_menu=True)
         return
@@ -1142,7 +1222,10 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await reply_ui(update, "Channel not set. Use /setchannel @channelusername", cfg, show_menu=True)
         return
 
-    if cfg.get("mode") == "creator":
+    mode = cfg.get("mode")
+    feeds = cfg.get("feeds", [])
+
+    if mode == "creator":
         msg = creator_make_post(user_id, cfg)
         await context.bot.send_message(chat_id=channel, text=msg)
         bump_daily_count(cfg)
@@ -1150,7 +1233,28 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await reply_ui(update, "✅ Posted 1 creator post.", cfg, show_menu=True)
         return
 
-    feeds = cfg.get("feeds", [])
+    if mode == "both":
+        best = pick_newest_unseen(cfg) if feeds else None
+        if best:
+            _, title, link, src = best
+            summary = extract_summary_for_link(src, link)
+            msg = llm_generate_post(user_id, cfg, title, summary, link)
+            await context.bot.send_message(chat_id=channel, text=msg, disable_web_page_preview=False)
+            cfg.setdefault("posted_urls", [])
+            cfg["posted_urls"].append(link)
+            cfg["posted_urls"] = cfg["posted_urls"][-int(cfg.get("max_dedupe", 1500)):]
+            bump_daily_count(cfg)
+            save_client(user_id, cfg)
+            await reply_ui(update, "✅ Posted 1 RSS item (both mode).", cfg, show_menu=True)
+            return
+
+        msg = creator_make_post(user_id, cfg)
+        await context.bot.send_message(chat_id=channel, text=msg)
+        bump_daily_count(cfg)
+        save_client(user_id, cfg)
+        await reply_ui(update, "✅ Posted 1 creator post (both mode fallback).", cfg, show_menu=True)
+        return
+
     if not feeds:
         await reply_ui(update, "No feeds. Add one: /addfeed <url>", cfg, show_menu=True)
         return
@@ -1344,8 +1448,10 @@ async def autopost_loop(app: Application) -> None:
                     if prev and (now - prev).total_seconds() < interval_min * 60:
                         continue
 
-                # creator mode
-                if cfg.get("mode") == "creator":
+                mode = cfg.get("mode")
+                feeds = cfg.get("feeds", [])
+
+                if mode == "creator":
                     msg = creator_make_post(user_id, cfg)
                     await app.bot.send_message(chat_id=channel, text=msg)
                     bump_daily_count(cfg)
@@ -1356,12 +1462,19 @@ async def autopost_loop(app: Application) -> None:
                     last_post_at[user_id] = now
                     continue
 
-                # rss mode
-                feeds = cfg.get("feeds", [])
-                if not feeds:
+                best = pick_newest_unseen(cfg) if feeds else None
+
+                if mode == "both" and not best:
+                    msg = creator_make_post(user_id, cfg)
+                    await app.bot.send_message(chat_id=channel, text=msg)
+                    bump_daily_count(cfg)
+                    if use_schedule:
+                        cfg["last_schedule_date"] = str(date.today())
+                        cfg["last_schedule_time"] = now.strftime("%H:%M")
+                    save_client(user_id, cfg)
+                    last_post_at[user_id] = now
                     continue
 
-                best = pick_newest_unseen(cfg)
                 if not best:
                     continue
 
@@ -1436,6 +1549,7 @@ def main() -> None:
     app.add_handler(CommandHandler("lang", lang_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("materials", materials_cmd))
     app.add_handler(CommandHandler("setup", setup_cmd))
     app.add_handler(CallbackQueryHandler(ui_callback))
 
