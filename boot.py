@@ -1,40 +1,29 @@
-from pathlib import Path
-import py_compile
+import os
 import sys
+from pathlib import Path
+import runpy
 
-
-def _has_merge_markers(path: Path) -> bool:
-    text = path.read_text(encoding="utf-8", errors="ignore")
-    return "<<<<<<<" in text or "=======" in text or ">>>>>>>" in text
-
-
-def _syntax_ok(path: Path) -> bool:
-    try:
-        py_compile.compile(str(path), doraise=True)
-        return True
-    except py_compile.PyCompileError as exc:
-        print("FATAL: main.py has a syntax/indentation error.", file=sys.stderr)
-        print(str(exc), file=sys.stderr)
+def file_has_real_merge_markers(path: str) -> bool:
+    p = Path(path)
+    if not p.exists():
         return False
 
+    text = p.read_text(encoding="utf-8", errors="ignore")
+    for line in text.splitlines():
+        s = line.lstrip()
+        if s.startswith("<<<<<<<") or s.startswith(">>>>>>>"):
+            return True
+    return False
 
 def main() -> None:
-    target = Path(__file__).with_name("main.py")
-    if _has_merge_markers(target):
-        print(
-            "FATAL: unresolved git merge markers found in main.py. "
-            "Please deploy a clean commit.",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
+    print("BOOT CWD:", os.getcwd())
+    print("BOOT main.py path:", str(Path("main.py").resolve()))
 
-    if not _syntax_ok(target):
-        raise SystemExit(1)
+    if file_has_real_merge_markers("main.py"):
+        print("FATAL: unresolved git merge markers found in main.py")
+        sys.exit(1)
 
-    from main import main as run_main
-
-    run_main()
-
+    runpy.run_path("main.py", run_name="__main__")
 
 if __name__ == "__main__":
     main()

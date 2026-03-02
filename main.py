@@ -36,6 +36,8 @@ TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
 PAY_CONTACTS = os.getenv("PAY_CONTACTS", "").strip()
 
+
+
 def env_int(name: str, default: int) -> int:
     raw = os.getenv(name, str(default)).strip()
     try:
@@ -105,6 +107,8 @@ TEXTS = {
 "btn_resetstyle": "♻️ Reset style",
 "btn_unsetchannel": "🧹 Unset channel",
 "btn_materials": "📚 Materials",
+"btn_materials": "📚 Materials",
+
         "menu_title": "✅ Menu. Choose what you want to do:",
 "setup_check": (
     "⚙️ Setup checklist:\n\n"
@@ -127,6 +131,8 @@ TEXTS = {
 "ui_pay": "Payment / activation:\n{pay}",
 "ui_schedule": "Schedule:\n{schedule}\n\nCommands:\n/schedule\n/schedule add 09:00\n/schedule remove 09:00\n/schedule clear\n/schedule on\n/schedule off",
 "ui_materials": "📚 Useful materials:\n• Prompt guide (RU): https://telegra.ph/Instrukciya-po-polzovaniyu-botom-i-poleznye-materialy-02-27\n• RSS feed ideas (EN): https://rss.app/new-rss-feed/create-twitter-rss-feed",
+"ui_materials": "📚 Useful materials:\n• Prompt guide (RU): https://telegra.ph/Instrukciya-po-polzovaniyu-botom-i-poleznye-materialy-02-27\n• RSS feed ideas (EN): https://rss.app/new-rss-feed/create-twitter-rss-feed",
+
         "choose_lang": (
             "👋 Hi! Choose your language.\n\n"
             "✅ Tap one option below and the language will be set automatically:\n"
@@ -181,6 +187,8 @@ TEXTS = {
 "btn_resetstyle": "♻️ Сбросить стиль",
 "btn_unsetchannel": "🧹 Отключить канал",
 "btn_materials": "📚 Материалы",
+"btn_materials": "📚 Материалы",
+
         "menu_title": "✅ Меню. Выберите действие:",
 "setup_check": (
     "⚙️ Чеклист настройки:\n\n"
@@ -203,6 +211,8 @@ TEXTS = {
 "ui_pay": "Оплата / активация:\n{pay}",
 "ui_schedule": "Расписание:\n{schedule}\n\nКоманды:\n/schedule\n/schedule add 09:00\n/schedule remove 09:00\n/schedule clear\n/schedule on\n/schedule off",
 "ui_materials": "📚 Полезные материалы:\n• Инструкция и создание промптов (RU): https://telegra.ph/Instrukciya-po-polzovaniyu-botom-i-poleznye-materialy-02-27\n• Идеи RSS-лент (EN): https://rss.app/new-rss-feed/create-twitter-rss-feed",
+"ui_materials": "📚 Полезные материалы:\n• Инструкция и создание промптов (RU): https://telegra.ph/Instrukciya-po-polzovaniyu-botom-i-poleznye-materialy-02-27\n• Идеи RSS-лент (EN): https://rss.app/new-rss-feed/create-twitter-rss-feed",
+
         "choose_lang": (
             "👋 Привет! Выберите язык.\n\n"
             "✅ Нажмите на вариант ниже, язык установится автоматически:\n"
@@ -288,6 +298,11 @@ def subscription_offer_text(lang: str) -> str:
 def pay_line(update: Update | None, cfg: dict) -> str:
     lang = detect_lang(update, cfg)
     return subscription_offer_text(lang)
+def pay_line(cfg: dict) -> str:
+    if PAY_CONTACTS:
+        return tr(cfg, "pay_msg").format(contacts=PAY_CONTACTS)
+    return tr(cfg, "no_contacts")
+
 
 # ===================== Default client config =====================
 DEFAULT_CLIENT = {
@@ -317,6 +332,8 @@ DEFAULT_CLIENT = {
     "style_file": DEFAULT_STYLE_FILE,
     "subscription_until": None,  # YYYY-MM-DD
     "subscription_plan": "FREE",
+    "subscription_plan": "FREE",
+
 }
 
 # ===================== Storage helpers =====================
@@ -613,6 +630,8 @@ def build_main_menu(cfg: dict) -> InlineKeyboardMarkup:
             InlineKeyboardButton(tr(cfg, "btn_status"), callback_data="ui:status"),
         ],
         [InlineKeyboardButton(tr(cfg, "btn_materials"), callback_data="ui:materials")],
+        [InlineKeyboardButton(tr(cfg, "btn_materials"), callback_data="ui:materials")],
+
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -675,6 +694,7 @@ def build_feeds_menu(cfg: dict) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton("➕ " + tr(cfg, "btn_addfeed"), callback_data="ui:addfeed")])
     return InlineKeyboardMarkup(rows)
 
+
 # ===================== Commands =====================
 async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -692,6 +712,8 @@ async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg["language"] = choice
     save_client(user_id, cfg)
     await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
+    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
+
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -702,6 +724,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
+    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
+
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -729,6 +753,7 @@ async def materials_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await send_menu(update, cfg, tr(cfg, "ui_materials"))
 
 
+
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
@@ -738,6 +763,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
+    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
+
 
 async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
@@ -757,6 +784,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             cfg["language"] = choice
             save_client(user_id, cfg)
             await reply_ui(update, tr(cfg, "lang_set") + "\n\n" + tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg), cfg, show_menu=True)
+            await reply_ui(update, tr(cfg, "lang_set") + "\n\n" + tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg), cfg, show_menu=True)
+
             return
         await q.answer()
         return
@@ -776,6 +805,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.edit_message_text(text=text, reply_markup=build_feeds_menu(cfg))
         except BadRequest:
             await q.message.reply_text(text=text, reply_markup=build_feeds_menu(cfg))
+        await send_menu(update, cfg, tr(cfg, "ui_addfeed"))
+
         return
 
     if data == "ui:unsetchannel":
@@ -832,6 +863,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         cfg["feeds"] = feeds
         save_client(user_id, cfg)
         await send_menu(update, cfg, f"✅ Deleted feed:\n{removed}\n\n{feeds_overview(cfg)}")
+        await send_menu(update, cfg, tr(cfg, "ui_pay").format(pay=pay_line(cfg)))
+
         return
 
     if data == "ui:status":
@@ -877,6 +910,7 @@ async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     m = context.args[0].strip().lower()
     if m not in ("rss", "creator", "both"):
         await update.message.reply_text("Usage: /mode rss OR /mode creator OR /mode both")
+
         return
 
     cfg["mode"] = m
@@ -1187,6 +1221,7 @@ async def feeds_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await update.message.reply_text(text, reply_markup=build_feeds_menu(cfg))
+
 async def delfeed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
@@ -1214,6 +1249,8 @@ async def delfeed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     cfg["feeds"] = feeds
     save_client(user_id, cfg)
     await send_menu(update, cfg, f"✅ Deleted feed:\n{removed}\n\n{feeds_overview(cfg)}")
+    await send_menu(update, cfg, f"✅ Deleted feed:\n{removed}\n\n{feeds_overview(cfg)}")
+
 
 async def clearfeeds_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -1227,10 +1264,10 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     cfg = load_client(user_id)
     mode = cfg.get("mode")
 
-    if mode == "creator":
-        msg = creator_make_post(user_id, cfg)
-        await reply_ui(update, "🧪 Preview:\n\n" + msg, cfg, show_menu=True)
-        return
+if mode == "creator":
+    msg = creator_make_post(user_id, cfg)
+    await reply_ui(update, "🧪 Preview:\n\n" + msg, cfg, show_menu=True)
+    return
 
     channel = cfg.get("channel")
     feeds = cfg.get("feeds", [])
@@ -1253,6 +1290,7 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await reply_ui(update, "🧪 Preview (RSS):\n\n" + rss_msg + "\n\n————\n🧪 Preview (Creator):\n\n" + creator_msg, cfg, show_menu=True)
         return
 
+
     if not feeds:
         await reply_ui(update, "No feeds. Add one: /addfeed <url>", cfg, show_menu=True)
         return
@@ -1273,6 +1311,8 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if not subscription_ok(cfg):
         await reply_ui(update, pay_line(update, cfg), cfg, show_menu=True)
+        await reply_ui(update, pay_line(update, cfg), cfg, show_menu=True)
+
         return
 
     if not can_post_more(cfg):
@@ -1288,6 +1328,8 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     feeds = cfg.get("feeds", [])
 
     if mode == "creator":
+    if cfg.get("mode") == "creator":
+
         msg = creator_make_post(user_id, cfg)
         await context.bot.send_message(chat_id=channel, text=msg)
         bump_daily_count(cfg)
@@ -1316,6 +1358,8 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         save_client(user_id, cfg)
         await reply_ui(update, "✅ Posted 1 creator post (both mode fallback).", cfg, show_menu=True)
         return
+
+    feeds = cfg.get("feeds", [])
 
     if not feeds:
         await reply_ui(update, "No feeds. Add one: /addfeed <url>", cfg, show_menu=True)
@@ -1428,6 +1472,7 @@ async def setsub_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"plan: {plan_raw}\n"
         f"expires: {expires_text}"
     )
+
 
 async def activate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     caller = update.effective_user.id
@@ -1569,6 +1614,9 @@ async def autopost_loop(app: Application) -> None:
                 feeds = cfg.get("feeds", [])
 
                 if mode == "creator":
+                # creator mode
+                if cfg.get("mode") == "creator":
+
                     msg = creator_make_post(user_id, cfg)
                     await app.bot.send_message(chat_id=channel, text=msg)
                     bump_daily_count(cfg)
@@ -1591,6 +1639,7 @@ async def autopost_loop(app: Application) -> None:
                     save_client(user_id, cfg)
                     last_post_at[user_id] = now
                     continue
+
 
                 if not best:
                     continue
@@ -1667,6 +1716,8 @@ def main() -> None:
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("materials", materials_cmd))
+    app.add_handler(CommandHandler("materials", materials_cmd))
+
     app.add_handler(CommandHandler("setup", setup_cmd))
     app.add_handler(CallbackQueryHandler(ui_callback))
 
@@ -1694,6 +1745,8 @@ def main() -> None:
 
     # admin
     app.add_handler(CommandHandler("setsub", setsub_cmd))
+    app.add_handler(CommandHandler("setsub", setsub_cmd))
+
     app.add_handler(CommandHandler("activate", activate_cmd))
     app.add_handler(CommandHandler("deactivate", deactivate_cmd))
     app.add_handler(CommandHandler("setlimit", setlimit_cmd))
