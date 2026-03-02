@@ -1,6 +1,10 @@
 from pathlib import Path
 import sys
 import os
+# other imports...
+
+print("BOOT CWD:", os.getcwd())
+print("BOOT checking:", os.path.abspath("main.py"))
 
 def _has_merge_markers(path: Path) -> bool:
     text = path.read_text(encoding="utf-8", errors="ignore")
