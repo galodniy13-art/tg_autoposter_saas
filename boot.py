@@ -2,11 +2,9 @@ from pathlib import Path
 import py_compile
 import sys
 
-
 def _has_merge_markers(path: Path) -> bool:
     text = path.read_text(encoding="utf-8", errors="ignore")
-    return "<<<<<<<" in text or "=======" in text or ">>>>>>>" in text
-
+    return bool(re.search(r"(?m)^(<<<<<<< |=======|>>>>>>> )", text))
 
 def _syntax_ok(path: Path) -> bool:
     try:
