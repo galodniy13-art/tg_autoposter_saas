@@ -4,7 +4,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -35,6 +35,24 @@ load_dotenv(BASE_DIR / ".env")
 TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
 PAY_CONTACTS = os.getenv("PAY_CONTACTS", "").strip()
+
+# Owner IDs: comma separated list, example: "123,456"
+OWNER_TELEGRAM_IDS = set()
+_raw_owner_ids = os.getenv("OWNER_TELEGRAM_IDS", "").strip()
+if _raw_owner_ids:
+    for x in _raw_owner_ids.split(","):
+        x = x.strip()
+        if x.isdigit():
+            OWNER_TELEGRAM_IDS.add(int(x))
+
+# Pricing constants
+BASIC_USD = int(os.getenv("BASIC_USD", "9"))
+PRO_USD = int(os.getenv("PRO_USD", "19"))
+ELITE_USD = int(os.getenv("ELITE_USD", "39"))
+
+BASIC_RUB = int(os.getenv("BASIC_RUB", "990"))
+PRO_RUB = int(os.getenv("PRO_RUB", "1990"))
+ELITE_RUB = int(os.getenv("ELITE_RUB", "3990"))
 
 # Admin IDs: comma separated list, example: "123,456"
 ADMIN_IDS = set()
@@ -223,10 +241,46 @@ def tr(cfg: dict, key: str) -> str:
         lang = "en"
     return TEXTS[lang].get(key, TEXTS["en"].get(key, key))
 
-def pay_line(cfg: dict) -> str:
-    if PAY_CONTACTS:
-        return tr(cfg, "pay_msg").format(contacts=PAY_CONTACTS)
-    return tr(cfg, "no_contacts")
+def detect_lang(update: Update | None, cfg: dict | None = None) -> str:
+    cfg = cfg or {}
+    user = update.effective_user if update else None
+    language_code = (getattr(user, "language_code", "") or "").lower()
+    if language_code.startswith("ru"):
+        return "ru"
+
+    cfg_lang = (cfg.get("language") or "").lower()
+    if cfg_lang in ("en", "ru"):
+        return cfg_lang
+    return "en"
+
+
+def subscription_offer_text(lang: str) -> str:
+    contact = PAY_CONTACTS or "@admin"
+    if lang == "ru":
+        return (
+            "🔒 Для этой функции нужна активная подписка.\n"
+            "Тарифы:\n"
+            f"• BASIC — {BASIC_RUB}₽/мес (1 канал, RSS, до 2 постов/день)\n"
+            f"• PRO — {PRO_RUB}₽/мес (до 3 каналов, RSS + Креатив, до 5 постов/день)\n"
+            f"• ELITE — {ELITE_RUB}₽/мес (больше каналов, расширенное расписание, приоритетная поддержка)\n"
+            "• TRIAL — 7 дней бесплатно\n"
+            f"Старт: напишите {contact}"
+        )
+
+    return (
+        "🔒 This feature requires an active subscription.\n"
+        "Plans:\n"
+        f"• BASIC — ${BASIC_USD}/mo (1 channel, RSS, up to 2 posts/day)\n"
+        f"• PRO — ${PRO_USD}/mo (up to 3 channels, RSS + Creative, up to 5 posts/day)\n"
+        f"• ELITE — ${ELITE_USD}/mo (more channels, advanced scheduling, priority support)\n"
+        "• TRIAL — 7 days free\n"
+        f"Start: message {contact}"
+    )
+
+
+def pay_line(update: Update | None, cfg: dict) -> str:
+    lang = detect_lang(update, cfg)
+    return subscription_offer_text(lang)
 
 # ===================== Default client config =====================
 DEFAULT_CLIENT = {
@@ -255,6 +309,7 @@ DEFAULT_CLIENT = {
 
     "style_file": DEFAULT_STYLE_FILE,
     "subscription_until": None,  # YYYY-MM-DD
+    "subscription_plan": "FREE",
 }
 
 # ===================== Storage helpers =====================
@@ -629,7 +684,7 @@ async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     cfg["language"] = choice
     save_client(user_id, cfg)
-    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(cfg))
+    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -639,7 +694,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
         return
 
-    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(cfg))
+    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -675,7 +730,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
         return
 
-    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(cfg))
+    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
 
 async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
@@ -694,7 +749,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if choice in ("en", "ru"):
             cfg["language"] = choice
             save_client(user_id, cfg)
-            await reply_ui(update, tr(cfg, "lang_set") + "\n\n" + tr(cfg, "menu_title") + "\n\n" + pay_line(cfg), cfg, show_menu=True)
+            await reply_ui(update, tr(cfg, "lang_set") + "\n\n" + tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg), cfg, show_menu=True)
             return
         await q.answer()
         return
@@ -748,7 +803,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:pay":
-        await send_menu(update, cfg, tr(cfg, "ui_pay").format(pay=pay_line(cfg)))
+        await send_menu(update, cfg, tr(cfg, "ui_pay").format(pay=pay_line(update, cfg)))
         return
 
     if data == "ui:materials":
@@ -1210,7 +1265,7 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     cfg = load_client(user_id)
 
     if not subscription_ok(cfg):
-        await reply_ui(update, tr(cfg, "sub_inactive") + "\n" + pay_line(cfg), cfg, show_menu=True)
+        await reply_ui(update, pay_line(update, cfg), cfg, show_menu=True)
         return
 
     if not can_post_more(cfg):
@@ -1312,6 +1367,61 @@ async def autopostoff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await reply_ui(update, "🛑 Autopost OFF.", cfg, show_menu=True)
 
 # ===================== Admin commands =====================
+async def setsub_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    caller = update.effective_user.id
+    if caller not in OWNER_TELEGRAM_IDS:
+        await update.message.reply_text("Not authorized.")
+        return
+
+    if len(context.args) != 3:
+        await update.message.reply_text(
+            "Usage: /setsub <user_id> <plan> <days>\n"
+            "Plans: BASIC, PRO, ELITE, TRIAL, FREE"
+        )
+        return
+
+    uid_raw, plan_raw, days_raw = context.args[0].strip(), context.args[1].strip().upper(), context.args[2].strip()
+    allowed = {"BASIC", "PRO", "ELITE", "TRIAL", "FREE"}
+
+    if not uid_raw.isdigit() or plan_raw not in allowed or not days_raw.isdigit():
+        await update.message.reply_text(
+            "Usage: /setsub <user_id> <plan> <days>\n"
+            "Plans: BASIC, PRO, ELITE, TRIAL, FREE"
+        )
+        return
+
+    days = int(days_raw)
+    if plan_raw == "TRIAL" and not (1 <= days <= 30):
+        await update.message.reply_text("TRIAL days must be 1..30")
+        return
+    if plan_raw in {"BASIC", "PRO", "ELITE"} and not (1 <= days <= 3650):
+        await update.message.reply_text(f"{plan_raw} days must be 1..3650")
+        return
+    if plan_raw == "FREE" and days != 0:
+        await update.message.reply_text("FREE supports only 0 days")
+        return
+
+    uid = int(uid_raw)
+    cfg = load_client(uid)
+    cfg["subscription_plan"] = plan_raw
+
+    if plan_raw == "FREE" and days == 0:
+        cfg["subscription_until"] = None
+        expires_text = "INACTIVE"
+    else:
+        expires_dt = datetime.now(timezone.utc).date() + timedelta(days=days)
+        cfg["subscription_until"] = str(expires_dt)
+        expires_text = cfg["subscription_until"]
+
+    save_client(uid, cfg)
+
+    await update.message.reply_text(
+        "✅ Subscription updated\n"
+        f"user_id: {uid}\n"
+        f"plan: {plan_raw}\n"
+        f"expires: {expires_text}"
+    )
+
 async def activate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     caller = update.effective_user.id
     if not is_admin(caller):
@@ -1576,6 +1686,7 @@ def main() -> None:
     app.add_handler(CommandHandler("autopostoff", autopostoff_cmd))
 
     # admin
+    app.add_handler(CommandHandler("setsub", setsub_cmd))
     app.add_handler(CommandHandler("activate", activate_cmd))
     app.add_handler(CommandHandler("deactivate", deactivate_cmd))
     app.add_handler(CommandHandler("setlimit", setlimit_cmd))
