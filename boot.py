@@ -1,36 +1,30 @@
-from pathlib import Path
-import sys
 import os
-# other imports...
+import sys
+from pathlib import Path
+import runpy
 
-print("BOOT CWD:", os.getcwd())
-print("BOOT checking:", os.path.abspath("main.py"))
+MARKERS = ("<<<<<<<", "=======", ">>>>>>>")
 
-def _has_merge_markers(path: Path) -> bool:
-    text = path.read_text(encoding="utf-8", errors="ignore")
-    return "<<<<<<<" in text or "=======" in text or ">>>>>>>" in text
-
+def file_has_merge_markers(path: str) -> bool:
+    p = Path(path)
+    if not p.exists():
+        return False
+    try:
+        text = p.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return False
+    return any(m in text for m in MARKERS)
 
 def main() -> None:
-    target = Path(__file__).with_name("main.py")
-    if has_merge_markers("main.py"):
     print("BOOT CWD:", os.getcwd())
-    print("BOOT checking:", os.path.abspath("main.py"))
-    print("FATAL: unresolved git merge markers found in main.py. Please deploy a clean commit.")
-    sys.exit(1)
-    
-    if _has_merge_markers(target):
-        print(
-            "FATAL: unresolved git merge markers found in main.py. "
-            "Please deploy a clean commit.",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
+    print("BOOT main.py path:", str(Path("main.py").resolve()))
 
-    from main import main as run_main
+    if file_has_merge_markers("main.py"):
+        print("FATAL: unresolved git merge markers found in main.py")
+        sys.exit(1)
 
-    run_main()
-
+    # Run the real app
+    runpy.run_path("main.py", run_name="__main__")
 
 if __name__ == "__main__":
     main()
