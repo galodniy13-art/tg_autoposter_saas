@@ -1,6 +1,6 @@
 from pathlib import Path
 import sys
-
+import os
 
 def _has_merge_markers(path: Path) -> bool:
     text = path.read_text(encoding="utf-8", errors="ignore")
@@ -9,6 +9,12 @@ def _has_merge_markers(path: Path) -> bool:
 
 def main() -> None:
     target = Path(__file__).with_name("main.py")
+    if has_merge_markers("main.py"):
+    print("BOOT CWD:", os.getcwd())
+    print("BOOT checking:", os.path.abspath("main.py"))
+    print("FATAL: unresolved git merge markers found in main.py. Please deploy a clean commit.")
+    sys.exit(1)
+    
     if _has_merge_markers(target):
         print(
             "FATAL: unresolved git merge markers found in main.py. "
