@@ -36,6 +36,15 @@ TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
 PAY_CONTACTS = os.getenv("PAY_CONTACTS", "").strip()
 
+
+
+def env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
 # Owner IDs: comma separated list, example: "123,456"
 OWNER_TELEGRAM_IDS = set()
 _raw_owner_ids = os.getenv("OWNER_TELEGRAM_IDS", "").strip()
@@ -46,13 +55,13 @@ if _raw_owner_ids:
             OWNER_TELEGRAM_IDS.add(int(x))
 
 # Pricing constants
-BASIC_USD = int(os.getenv("BASIC_USD", "9"))
-PRO_USD = int(os.getenv("PRO_USD", "19"))
-ELITE_USD = int(os.getenv("ELITE_USD", "39"))
+BASIC_USD = env_int("BASIC_USD", 9)
+PRO_USD = env_int("PRO_USD", 19)
+ELITE_USD = env_int("ELITE_USD", 39)
 
-BASIC_RUB = int(os.getenv("BASIC_RUB", "990"))
-PRO_RUB = int(os.getenv("PRO_RUB", "1990"))
-ELITE_RUB = int(os.getenv("ELITE_RUB", "3990"))
+BASIC_RUB = env_int("BASIC_RUB", 990)
+PRO_RUB = env_int("PRO_RUB", 1990)
+ELITE_RUB = env_int("ELITE_RUB", 3990)
 
 # Admin IDs: comma separated list, example: "123,456"
 ADMIN_IDS = set()
