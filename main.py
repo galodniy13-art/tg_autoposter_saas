@@ -1264,14 +1264,10 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     cfg = load_client(user_id)
     mode = cfg.get("mode")
 
-    if mode == "creator":
-    mode = cfg.get("mode")
-
-    if mode == "creator":
-
-        msg = creator_make_post(user_id, cfg)
-        await reply_ui(update, "🧪 Preview:\n\n" + msg, cfg, show_menu=True)
-        return
+if mode == "creator":
+    msg = creator_make_post(user_id, cfg)
+    await reply_ui(update, "🧪 Preview:\n\n" + msg, cfg, show_menu=True)
+    return
 
     channel = cfg.get("channel")
     feeds = cfg.get("feeds", [])
