@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
+from mode_ui import mode_set_text
+from keyboards import build_lang_keyboard, build_main_menu_minimal, build_setup_submenu
 from mode_ui import build_mode_buttons, mode_set_text
 from keyboards import build_lang_keyboard
 from texts import TEXTS as UI_TEXTS
@@ -595,6 +597,17 @@ def ui_text(cfg: dict | None, key: str) -> str:
 
 
 def build_main_menu(cfg: dict) -> InlineKeyboardMarkup:
+    lang = (cfg.get("language") or "en").lower()
+    if lang not in UI_TEXTS:
+        lang = "en"
+    return build_main_menu_minimal(UI_TEXTS[lang])
+
+
+def build_setup_menu(cfg: dict) -> InlineKeyboardMarkup:
+    lang = (cfg.get("language") or "en").lower()
+    if lang not in UI_TEXTS:
+        lang = "en"
+    return build_setup_submenu(UI_TEXTS[lang])
     keyboard = [
         [InlineKeyboardButton(ui_text(cfg, "btn_lang"), callback_data="ui:lang")],
         [InlineKeyboardButton(tr(cfg, "btn_setup"), callback_data="ui:setup")],
@@ -772,7 +785,35 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:setup":
+        try:
+            await q.answer()
+            await q.edit_message_text(text=tr(cfg, "setup_check"), reply_markup=build_setup_menu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=tr(cfg, "setup_check"), reply_markup=build_setup_menu(cfg))
+        return
+
+    if data == "ui:backmain":
+        await send_menu(update, cfg, tr(cfg, "menu_title"))
+        return
+
+    if data == "ui:modes":
+        lang = (cfg.get("language") or "en").lower()
+        if lang not in UI_TEXTS:
+            lang = "en"
+        await send_menu(update, cfg, UI_TEXTS[lang]["modes_help"])
+        return
+
+    if data == "ui:help":
         await send_menu(update, cfg, tr(cfg, "setup_check"))
+        return
+
+    if data == "ui:feedsdelete":
+        text = feeds_overview(cfg)
+        try:
+            await q.answer()
+            await q.edit_message_text(text=text, reply_markup=build_feeds_menu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_feeds_menu(cfg))
         return
 
     if data == "ui:setchannel":
