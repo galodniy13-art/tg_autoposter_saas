@@ -16,6 +16,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
 from mode_ui import mode_set_text
 from keyboards import build_lang_keyboard, build_main_menu_minimal, build_setup_submenu
+from mode_ui import build_mode_buttons, mode_set_text
+from keyboards import build_lang_keyboard
 from texts import TEXTS as UI_TEXTS
 from telegram.constants import ChatMemberStatus
 from telegram.error import BadRequest
@@ -587,6 +589,13 @@ def creator_make_post(user_id: int, cfg: dict) -> str:
     data = r.json()
     return clean_text(data.get("response", ""))[:900]
 
+def ui_text(cfg: dict | None, key: str) -> str:
+    lang = ((cfg or {}).get("language") or "en").lower()
+    if lang not in UI_TEXTS:
+        lang = "en"
+    return UI_TEXTS[lang].get(key, UI_TEXTS["en"].get(key, key))
+
+
 def build_main_menu(cfg: dict) -> InlineKeyboardMarkup:
     lang = (cfg.get("language") or "en").lower()
     if lang not in UI_TEXTS:
@@ -599,6 +608,38 @@ def build_setup_menu(cfg: dict) -> InlineKeyboardMarkup:
     if lang not in UI_TEXTS:
         lang = "en"
     return build_setup_submenu(UI_TEXTS[lang])
+    keyboard = [
+        [InlineKeyboardButton(ui_text(cfg, "btn_lang"), callback_data="ui:lang")],
+        [InlineKeyboardButton(tr(cfg, "btn_setup"), callback_data="ui:setup")],
+        build_mode_buttons(cfg),
+        [
+            InlineKeyboardButton(tr(cfg, "btn_setchannel"), callback_data="ui:setchannel"),
+            InlineKeyboardButton(tr(cfg, "btn_unsetchannel"), callback_data="ui:unsetchannel"),
+        ],
+        [
+            InlineKeyboardButton(tr(cfg, "btn_addfeed"), callback_data="ui:addfeed"),
+            InlineKeyboardButton(tr(cfg, "btn_schedule"), callback_data="ui:schedule"),
+        ],
+        [
+            InlineKeyboardButton(tr(cfg, "btn_setstyle"), callback_data="ui:setstyle"),
+            InlineKeyboardButton(tr(cfg, "btn_showstyle"), callback_data="ui:showstyle"),
+        ],
+        [
+            InlineKeyboardButton(tr(cfg, "btn_resetstyle"), callback_data="ui:resetstyle"),
+            InlineKeyboardButton(tr(cfg, "btn_preview"), callback_data="ui:preview"),
+        ],
+        [InlineKeyboardButton(tr(cfg, "btn_post"), callback_data="ui:fetchonce")],
+        [
+            InlineKeyboardButton(tr(cfg, "btn_on"), callback_data="ui:autoposton"),
+            InlineKeyboardButton(tr(cfg, "btn_off"), callback_data="ui:autopostoff"),
+        ],
+        [
+            InlineKeyboardButton(tr(cfg, "btn_pay"), callback_data="ui:pay"),
+            InlineKeyboardButton(tr(cfg, "btn_status"), callback_data="ui:status"),
+        ],
+        [InlineKeyboardButton(tr(cfg, "btn_materials"), callback_data="ui:materials")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
 
 def build_lang_menu() -> InlineKeyboardMarkup:
@@ -660,12 +701,12 @@ async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = load_client(user_id)
 
     if not context.args:
-        await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
+        await update.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
         return
 
     choice = context.args[0].strip().lower()
     if choice not in ("en", "ru"):
-        await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
+        await update.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
         return
 
     cfg["language"] = choice
@@ -677,10 +718,13 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = load_client(user_id)
 
     if not cfg.get("language"):
-        await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
+        await update.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
         return
 
-    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
+    lang = (cfg.get("language") or "en").lower()
+    if lang not in UI_TEXTS:
+        lang = "en"
+    await send_menu(update, cfg, UI_TEXTS[lang]["start_welcome"])
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -713,7 +757,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = load_client(user_id)
 
     if not cfg.get("language"):
-        await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
+        await update.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
         return
 
     await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
@@ -727,7 +771,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data == "ui:lang":
         await q.answer()
-        await q.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
+        await q.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
         return
 
     if data.startswith("ui:setlang:"):
@@ -876,7 +920,7 @@ async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = load_client(user_id)
 
     if not cfg.get("language"):
-        await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
+        await update.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
         return
 
     await send_menu(update, cfg, tr(cfg, "setup_check"))
