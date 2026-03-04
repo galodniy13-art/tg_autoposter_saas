@@ -3,7 +3,7 @@ TEXTS = {
         "welcome": "Welcome!",
         "menu_title": "Menu. Choose an action:",
         "mode_usage": "Usage: /mode rss OR /mode creator OR /mode both",
-        "payment_offer": (
+        "payment_offer":
             "🔒 This feature requires an active subscription.\n"
             "Plans (EUR):\n"
             "• BASIC — €9/month\n"
@@ -56,7 +56,7 @@ TEXTS = {
         "welcome": "Добро пожаловать!",
         "menu_title": "Меню. Выберите действие:",
         "mode_usage": "Использование: /mode rss ИЛИ /mode creator ИЛИ /mode both",
-        "payment_offer": (
+        "payment_offer":
             "🔒 Для этой функции нужна активная подписка.\n"
             "Тарифы (EUR):\n"
             "• BASIC — €9/месяц\n"
