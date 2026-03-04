@@ -10,6 +10,9 @@ def build_lang_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+
+def build_setup_submenu(labels: dict, autopost_enabled: bool) -> InlineKeyboardMarkup:
+    toggle_label = labels["btn_autopost_on"] if autopost_enabled else labels["btn_autopost_off"]
 def build_main_menu_minimal(labels: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
@@ -30,6 +33,7 @@ def build_setup_submenu(labels: dict) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(labels["btn_setchannel"], callback_data="ui:setchannel"),
                 InlineKeyboardButton(labels["btn_unsetchannel"], callback_data="ui:unsetchannel"),
             ],
+            [InlineKeyboardButton(labels["btn_addfeed"], callback_data="ui:addfeed")],
             [
                 InlineKeyboardButton(labels["btn_addfeed"], callback_data="ui:addfeed"),
                 InlineKeyboardButton(labels["btn_deletefeed"], callback_data="ui:feedsdelete"),
@@ -39,6 +43,7 @@ def build_setup_submenu(labels: dict) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(labels["btn_showstyle"], callback_data="ui:showstyle"),
             ],
             [InlineKeyboardButton(labels["btn_resetstyle"], callback_data="ui:resetstyle")],
+            [InlineKeyboardButton(toggle_label, callback_data="ui:autoposttoggle")],
             [
                 InlineKeyboardButton(labels["btn_on"], callback_data="ui:autoposton"),
                 InlineKeyboardButton(labels["btn_off"], callback_data="ui:autopostoff"),

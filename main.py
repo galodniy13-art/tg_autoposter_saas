@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
+from mode_ui import build_mode_buttons, mode_set_text
+from keyboards import build_lang_keyboard, build_setup_submenu
 from mode_ui import mode_set_text
 from keyboards import build_lang_keyboard, build_main_menu_minimal, build_setup_submenu
 from mode_ui import build_mode_buttons, mode_set_text
@@ -253,6 +255,13 @@ def tr(cfg: dict, key: str) -> str:
     if lang not in ("en", "ru"):
         lang = "en"
     return TEXTS[lang].get(key, TEXTS["en"].get(key, key))
+
+def ui_text(cfg: dict, key: str) -> str:
+    lang = (cfg.get("language") or "en").lower()
+    if lang not in UI_TEXTS:
+        lang = "en"
+    return UI_TEXTS[lang].get(key, UI_TEXTS["en"].get(key, key))
+
 
 def detect_lang(update: Update | None, cfg: dict | None = None) -> str:
     cfg = cfg or {}
@@ -630,16 +639,27 @@ def build_setup_menu(cfg: dict) -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton(tr(cfg, "btn_post"), callback_data="ui:fetchonce")],
         [
-            InlineKeyboardButton(tr(cfg, "btn_on"), callback_data="ui:autoposton"),
-            InlineKeyboardButton(tr(cfg, "btn_off"), callback_data="ui:autopostoff"),
-        ],
-        [
             InlineKeyboardButton(tr(cfg, "btn_pay"), callback_data="ui:pay"),
             InlineKeyboardButton(tr(cfg, "btn_status"), callback_data="ui:status"),
         ],
         [InlineKeyboardButton(tr(cfg, "btn_materials"), callback_data="ui:materials")],
     ]
     return InlineKeyboardMarkup(keyboard)
+
+
+def build_setup_menu(cfg: dict) -> InlineKeyboardMarkup:
+    labels = {
+        "btn_setchannel": tr(cfg, "btn_setchannel"),
+        "btn_unsetchannel": tr(cfg, "btn_unsetchannel"),
+        "btn_addfeed": tr(cfg, "btn_addfeed"),
+        "btn_setstyle": tr(cfg, "btn_setstyle"),
+        "btn_showstyle": tr(cfg, "btn_showstyle"),
+        "btn_resetstyle": tr(cfg, "btn_resetstyle"),
+        "btn_back": ui_text(cfg, "btn_back"),
+        "btn_autopost_on": ui_text(cfg, "btn_autopost_on"),
+        "btn_autopost_off": ui_text(cfg, "btn_autopost_off"),
+    }
+    return build_setup_submenu(labels, bool(cfg.get("autopost_enabled")))
 
 
 def build_lang_menu() -> InlineKeyboardMarkup:
@@ -787,6 +807,23 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:setup":
         try:
             await q.answer()
+            await q.edit_message_text(text=ui_text(cfg, "setup_menu_title"), reply_markup=build_setup_menu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=ui_text(cfg, "setup_menu_title"), reply_markup=build_setup_menu(cfg))
+        return
+
+    if data == "ui:backmain":
+        await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
+        return
+
+    if data == "ui:autoposttoggle":
+        cfg["autopost_enabled"] = not bool(cfg.get("autopost_enabled"))
+        save_client(user_id, cfg)
+        try:
+            await q.answer()
+            await q.edit_message_text(text=ui_text(cfg, "setup_menu_title"), reply_markup=build_setup_menu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=ui_text(cfg, "setup_menu_title"), reply_markup=build_setup_menu(cfg))
             await q.edit_message_text(text=tr(cfg, "setup_check"), reply_markup=build_setup_menu(cfg))
         except BadRequest:
             await q.message.reply_text(text=tr(cfg, "setup_check"), reply_markup=build_setup_menu(cfg))
