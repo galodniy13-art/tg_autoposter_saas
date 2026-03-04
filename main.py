@@ -701,7 +701,10 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
         return
 
-    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
+    lang = (cfg.get("language") or "en").lower()
+    if lang not in UI_TEXTS:
+        lang = "en"
+    await send_menu(update, cfg, UI_TEXTS[lang]["start_welcome"])
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
