@@ -3,6 +3,8 @@ TEXTS = {
         "welcome": "Welcome!",
         "menu_title": "Menu. Choose an action:",
         "mode_usage": "Usage: /mode rss OR /mode creator OR /mode both",
+        "btn_lang": "🌐 Language",
+        "choose_lang": "Choose your language:",
         "start_welcome": (
             "👋 Welcome to AI autoposting for influencers.\n\n"
             "This bot helps you publish on Telegram using AI in two modes:\n"
@@ -18,6 +20,8 @@ TEXTS = {
         "welcome": "Добро пожаловать!",
         "menu_title": "Меню. Выберите действие:",
         "mode_usage": "Использование: /mode rss ИЛИ /mode creator ИЛИ /mode both",
+        "btn_lang": "🌐 Язык",
+        "choose_lang": "Выберите язык:",
         "start_welcome": (
             "👋 Добро пожаловать в AI-автопостинг для инфлюенсеров.\n\n"
             "Бот помогает публиковать в Telegram с помощью ИИ в двух режимах:\n"
