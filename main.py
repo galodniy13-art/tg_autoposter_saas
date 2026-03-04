@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
+from mode_ui import mode_set_text
+from keyboards import build_lang_keyboard, build_modes_menu, build_payment_menu
 from mode_ui import build_mode_buttons, mode_set_text
 from keyboards import build_lang_keyboard, build_setup_submenu
 from mode_ui import mode_set_text
@@ -256,12 +258,16 @@ def tr(cfg: dict, key: str) -> str:
         lang = "en"
     return TEXTS[lang].get(key, TEXTS["en"].get(key, key))
 
+
 def ui_text(cfg: dict, key: str) -> str:
     lang = (cfg.get("language") or "en").lower()
     if lang not in UI_TEXTS:
         lang = "en"
     return UI_TEXTS[lang].get(key, UI_TEXTS["en"].get(key, key))
 
+
+def creative_mode_allowed(cfg: dict) -> bool:
+    return subscription_ok(cfg) and (cfg.get("subscription_plan") in {"PRO", "ELITE"})
 
 def detect_lang(update: Update | None, cfg: dict | None = None) -> str:
     cfg = cfg or {}
@@ -620,6 +626,7 @@ def build_setup_menu(cfg: dict) -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton(ui_text(cfg, "btn_lang"), callback_data="ui:lang")],
         [InlineKeyboardButton(tr(cfg, "btn_setup"), callback_data="ui:setup")],
+        [InlineKeyboardButton(ui_text(cfg, "btn_modes"), callback_data="ui:modes")],
         build_mode_buttons(cfg),
         [
             InlineKeyboardButton(tr(cfg, "btn_setchannel"), callback_data="ui:setchannel"),
@@ -904,6 +911,32 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:materials":
         await send_menu(update, cfg, tr(cfg, "ui_materials"))
         return
+    if data == "ui:modes":
+        labels = {
+            "mode_rss_ai": ui_text(cfg, "mode_rss_ai"),
+            "mode_creative": ui_text(cfg, "mode_creative"),
+        }
+        await q.answer()
+        await q.message.reply_text(ui_text(cfg, "modes_title"), reply_markup=build_modes_menu(labels))
+        return
+
+    if data == "ui:modepick:rss":
+        cfg["mode"] = "rss"
+        save_client(user_id, cfg)
+        await send_menu(update, cfg, mode_set_text(cfg, "rss"))
+        return
+
+    if data == "ui:modepick:creator":
+        if not creative_mode_allowed(cfg):
+            labels = {"btn_payment": ui_text(cfg, "btn_payment")}
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "creative_locked") + "\n\n" + pay_line(update, cfg), reply_markup=build_payment_menu(labels))
+            return
+        cfg["mode"] = "creator"
+        save_client(user_id, cfg)
+        await send_menu(update, cfg, mode_set_text(cfg, "creator"))
+        return
+
 
     if data.startswith("ui:delfeed:"):
         raw_idx = data.split(":", 2)[2]

@@ -10,6 +10,18 @@ def build_lang_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def build_modes_menu(labels: dict) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(labels["mode_rss_ai"], callback_data="ui:modepick:rss")],
+            [InlineKeyboardButton(labels["mode_creative"], callback_data="ui:modepick:creator")],
+        ]
+    )
+
+
+def build_payment_menu(labels: dict) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(labels["btn_payment"], callback_data="ui:pay")]]
 
 def build_setup_submenu(labels: dict, autopost_enabled: bool) -> InlineKeyboardMarkup:
     toggle_label = labels["btn_autopost_on"] if autopost_enabled else labels["btn_autopost_off"]
