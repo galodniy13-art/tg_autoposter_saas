@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
 from mode_ui import build_mode_buttons, mode_set_text
+from keyboards import build_lang_keyboard
+from texts import TEXTS as UI_TEXTS
 from telegram.constants import ChatMemberStatus
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -621,12 +623,7 @@ def build_main_menu(cfg: dict) -> InlineKeyboardMarkup:
 
 
 def build_lang_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("🇬🇧 English", callback_data="ui:setlang:en")],
-            [InlineKeyboardButton("🇷🇺 Русский", callback_data="ui:setlang:ru")],
-        ]
-    )
+    return build_lang_keyboard()
 
 
 async def reply_ui(update: Update, text: str, cfg: dict, show_menu: bool = True) -> None:
@@ -882,12 +879,12 @@ async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = load_client(user_id)
 
     if not context.args:
-        await update.message.reply_text("Usage: /mode rss OR /mode creator OR /mode both")
+        await update.message.reply_text(UI_TEXTS["en"]["mode_usage"])
         return
 
     m = context.args[0].strip().lower()
     if m not in ("rss", "creator", "both"):
-        await update.message.reply_text("Usage: /mode rss OR /mode creator OR /mode both")
+        await update.message.reply_text(UI_TEXTS["en"]["mode_usage"])
         return
 
     cfg["mode"] = m
