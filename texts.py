@@ -12,7 +12,7 @@ TEXTS = {
             "Modes:\n"
             "• RSS + AI — RSS mode + AI posts using your prompt/style\n"
             "• Creative mode — fully AI-generated posts from prompts\n\n"
-            "To activate, message: @a_karaglan, @a_karaglanov"
+            "To activate, message: @a_karaglan, @a_karaglanov",
         "btn_modes": "🧠 Modes",
         "modes_title": "🧠 Modes. Choose publishing type:",
         "mode_rss_ai": "📰 RSS + AI",
@@ -65,7 +65,7 @@ TEXTS = {
             "Режимы:\n"
             "• RSS + AI — RSS-режим + AI-посты по вашему prompt/style\n"
             "• Creative mode — полностью AI-сгенерированные посты из промптов\n\n"
-            "Для активации напишите: @a_karaglan, @a_karaglanov"
+            "Для активации напишите: @a_karaglan, @a_karaglanov",
         "btn_modes": "🧠 Режимы",
         "modes_title": "🧠 Режимы. Выберите тип публикаций:",
         "mode_rss_ai": "📰 RSS + AI",
