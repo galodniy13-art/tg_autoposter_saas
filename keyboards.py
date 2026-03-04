@@ -20,11 +20,17 @@ def build_modes_menu(labels: dict) -> InlineKeyboardMarkup:
 
 
 def build_payment_menu(labels: dict) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(labels["btn_payment"], callback_data="ui:pay")]]
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(labels["btn_payment"], callback_data="ui:pay")]
+    ])
 
 def build_setup_submenu(labels: dict, autopost_enabled: bool) -> InlineKeyboardMarkup:
     toggle_label = labels["btn_autopost_on"] if autopost_enabled else labels["btn_autopost_off"]
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(toggle_label, callback_data="ui:autopost:toggle")],
+        [InlineKeyboardButton(labels["btn_back"], callback_data="ui:back")],
+    ])
+    
 def build_main_menu_minimal(labels: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
