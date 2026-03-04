@@ -13,6 +13,8 @@ import requests
 from dotenv import load_dotenv
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+
+from mode_ui import build_mode_buttons, mode_set_text
 from telegram.constants import ChatMemberStatus
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -587,6 +589,7 @@ def build_main_menu(cfg: dict) -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton(tr(cfg, "btn_lang"), callback_data="ui:lang")],
         [InlineKeyboardButton(tr(cfg, "btn_setup"), callback_data="ui:setup")],
+        build_mode_buttons(cfg),
         [
             InlineKeyboardButton(tr(cfg, "btn_setchannel"), callback_data="ui:setchannel"),
             InlineKeyboardButton(tr(cfg, "btn_unsetchannel"), callback_data="ui:unsetchannel"),
@@ -834,6 +837,14 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await send_menu(update, cfg, f"✅ Deleted feed:\n{removed}\n\n{feeds_overview(cfg)}")
         return
 
+    if data.startswith("ui:mode:"):
+        mode = data.split(":", 2)[2]
+        if mode in ("rss", "creator", "both"):
+            cfg["mode"] = mode
+            save_client(user_id, cfg)
+            await send_menu(update, cfg, mode_set_text(cfg, mode))
+        return
+
     if data == "ui:status":
         await status_cmd(update, context)
         return
@@ -881,7 +892,7 @@ async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     cfg["mode"] = m
     save_client(user_id, cfg)
-    await update.message.reply_text(f"✅ Mode set: {m}")
+    await update.message.reply_text(mode_set_text(cfg, m))
 
 async def setprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
