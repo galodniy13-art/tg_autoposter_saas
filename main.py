@@ -13,6 +13,10 @@ import requests
 from dotenv import load_dotenv
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+
+from mode_ui import build_mode_buttons, mode_set_text
+from keyboards import build_lang_keyboard
+from texts import TEXTS as UI_TEXTS
 from telegram.constants import ChatMemberStatus
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -583,10 +587,18 @@ def creator_make_post(user_id: int, cfg: dict) -> str:
     data = r.json()
     return clean_text(data.get("response", ""))[:900]
 
+def ui_text(cfg: dict | None, key: str) -> str:
+    lang = ((cfg or {}).get("language") or "en").lower()
+    if lang not in UI_TEXTS:
+        lang = "en"
+    return UI_TEXTS[lang].get(key, UI_TEXTS["en"].get(key, key))
+
+
 def build_main_menu(cfg: dict) -> InlineKeyboardMarkup:
     keyboard = [
-        [InlineKeyboardButton(tr(cfg, "btn_lang"), callback_data="ui:lang")],
+        [InlineKeyboardButton(ui_text(cfg, "btn_lang"), callback_data="ui:lang")],
         [InlineKeyboardButton(tr(cfg, "btn_setup"), callback_data="ui:setup")],
+        build_mode_buttons(cfg),
         [
             InlineKeyboardButton(tr(cfg, "btn_setchannel"), callback_data="ui:setchannel"),
             InlineKeyboardButton(tr(cfg, "btn_unsetchannel"), callback_data="ui:unsetchannel"),
@@ -618,12 +630,7 @@ def build_main_menu(cfg: dict) -> InlineKeyboardMarkup:
 
 
 def build_lang_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("🇬🇧 English", callback_data="ui:setlang:en")],
-            [InlineKeyboardButton("🇷🇺 Русский", callback_data="ui:setlang:ru")],
-        ]
-    )
+    return build_lang_keyboard()
 
 
 async def reply_ui(update: Update, text: str, cfg: dict, show_menu: bool = True) -> None:
@@ -681,12 +688,12 @@ async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = load_client(user_id)
 
     if not context.args:
-        await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
+        await update.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
         return
 
     choice = context.args[0].strip().lower()
     if choice not in ("en", "ru"):
-        await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
+        await update.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
         return
 
     cfg["language"] = choice
@@ -698,7 +705,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = load_client(user_id)
 
     if not cfg.get("language"):
-        await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
+        await update.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
         return
 
     await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
@@ -734,7 +741,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = load_client(user_id)
 
     if not cfg.get("language"):
-        await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
+        await update.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
         return
 
     await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
@@ -748,7 +755,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data == "ui:lang":
         await q.answer()
-        await q.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
+        await q.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
         return
 
     if data.startswith("ui:setlang:"):
@@ -834,6 +841,14 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await send_menu(update, cfg, f"✅ Deleted feed:\n{removed}\n\n{feeds_overview(cfg)}")
         return
 
+    if data.startswith("ui:mode:"):
+        mode = data.split(":", 2)[2]
+        if mode in ("rss", "creator", "both"):
+            cfg["mode"] = mode
+            save_client(user_id, cfg)
+            await send_menu(update, cfg, mode_set_text(cfg, mode))
+        return
+
     if data == "ui:status":
         await status_cmd(update, context)
         return
@@ -861,7 +876,7 @@ async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = load_client(user_id)
 
     if not cfg.get("language"):
-        await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
+        await update.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
         return
 
     await send_menu(update, cfg, tr(cfg, "setup_check"))
@@ -871,17 +886,17 @@ async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = load_client(user_id)
 
     if not context.args:
-        await update.message.reply_text("Usage: /mode rss OR /mode creator OR /mode both")
+        await update.message.reply_text(UI_TEXTS["en"]["mode_usage"])
         return
 
     m = context.args[0].strip().lower()
     if m not in ("rss", "creator", "both"):
-        await update.message.reply_text("Usage: /mode rss OR /mode creator OR /mode both")
+        await update.message.reply_text(UI_TEXTS["en"]["mode_usage"])
         return
 
     cfg["mode"] = m
     save_client(user_id, cfg)
-    await update.message.reply_text(f"✅ Mode set: {m}")
+    await update.message.reply_text(mode_set_text(cfg, m))
 
 async def setprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
