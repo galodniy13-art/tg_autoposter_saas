@@ -796,8 +796,8 @@ elif data.startswith("ui:setlang:"):
         await q.answer()
         return
 
-if data == "ui:setup":
-    try:
+    if data == "ui:setup":
+        try:
         await q.answer()
         await q.edit_message_text(
             text=ui_text(cfg, "setup_menu_title"),
