@@ -798,11 +798,11 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.message.reply_text(text=ui_text(cfg, "setup_menu_title"), reply_markup=build_setup_menu(cfg))
         return
 
-    if data == "ui:backmain":
+        if data == "ui:backmain":
         await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
         return
 
-        if data == "ui:autoposttoggle":
+    elif data == "ui:autoposttoggle":
         cfg["autopost_enabled"] = not bool(cfg.get("autopost_enabled"))
         save_client(user_id, cfg)
         await q.answer()
@@ -816,10 +816,6 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 text=ui_text(cfg, "setup_menu_title"),
                 reply_markup=build_setup_menu(cfg),
             )
-        return
-
-    if data == "ui:backmain":
-        await send_menu(update, cfg, tr(cfg, "menu_title"))
         return
 
     if data == "ui:modes":
