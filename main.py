@@ -768,6 +768,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
 
+from telegram.error import BadRequest
+from telegram import Update
+from telegram.ext import ContextTypes
+
 async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     user_id = q.from_user.id
@@ -790,62 +794,71 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             save_client(user_id, cfg)
             await reply_ui(
                 update,
-                tr(cfg, "lang_set") + "\n\n" + tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg),
+                tr(cfg, "lang_set")
+                + "\n\n"
+                + tr(cfg, "menu_title")
+                + "\n\n"
+                + pay_line(update, cfg),
             )
             return
         await q.answer()
         return
 
-if data == "ui:setup":
-    try:
-        await q.answer()
-        await q.edit_message_text(
-            text=ui_text(cfg, "setup_menu_title"),
-            reply_markup=build_setup_menu(cfg),
-        )
-    except BadRequest:
-        await q.message.reply_text(
-            text=ui_text(cfg, "setup_menu_title"),
-            reply_markup=build_setup_menu(cfg),
-        )
-    return
-
-elif data == "ui:backmain":
-    await send_menu(
-        update,
-        cfg,
-        tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg),
-    )
-    return
-
-elif data == "ui:autoposttoggle":
-    cfg["autopost_enabled"] = not bool(cfg.get("autopost_enabled"))
-    save_client(user_id, cfg)
-    await q.answer()
-    try:
-        await q.edit_message_text(
-            text=ui_text(cfg, "setup_menu_title"),
-            reply_markup=build_setup_menu(cfg),
-        )
-    except BadRequest:
-        await q.message.reply_text(
-            text=ui_text(cfg, "setup_menu_title"),
-            reply_markup=build_setup_menu(cfg),
-        )
-    return
-
-    if data == "ui:modes":
-        lang = (cfg.get("language") or "en").lower()
-        if lang not in UI_TEXTS:
-            lang = "en"
-        await send_menu(update, cfg, UI_TEXTS[lang].get("modes_help", UI_TEXTS["en"].get("modes_help", "")))
+    elif data == "ui:setup":
+        try:
+            await q.answer()
+            await q.edit_message_text(
+                text=ui_text(cfg, "setup_menu_title"),
+                reply_markup=build_setup_menu(cfg),
+            )
+        except BadRequest:
+            await q.message.reply_text(
+                text=ui_text(cfg, "setup_menu_title"),
+                reply_markup=build_setup_menu(cfg),
+            )
         return
 
-    if data == "ui:help":
+    elif data == "ui:backmain":
+        await send_menu(
+            update,
+            cfg,
+            tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg),
+        )
+        return
+
+    elif data == "ui:autoposttoggle":
+        cfg["autopost_enabled"] = not bool(cfg.get("autopost_enabled"))
+        save_client(user_id, cfg)
+        await q.answer()
+        try:
+            await q.edit_message_text(
+                text=ui_text(cfg, "setup_menu_title"),
+                reply_markup=build_setup_menu(cfg),
+            )
+        except BadRequest:
+            await q.message.reply_text(
+                text=ui_text(cfg, "setup_menu_title"),
+                reply_markup=build_setup_menu(cfg),
+            )
+        return
+
+    elif data == "ui:modes":
+        labels = {
+            "mode_rss_ai": ui_text(cfg, "mode_rss_ai"),
+            "mode_creative": ui_text(cfg, "mode_creative"),
+        }
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "modes_title"),
+            reply_markup=build_modes_menu(labels),
+        )
+        return
+
+    elif data == "ui:help":
         await send_menu(update, cfg, tr(cfg, "setup_check"))
         return
 
-    if data == "ui:feedsdelete":
+    elif data == "ui:feedsdelete":
         text = feeds_overview(cfg)
         try:
             await q.answer()
@@ -854,11 +867,11 @@ elif data == "ui:autoposttoggle":
             await q.message.reply_text(text=text, reply_markup=build_feeds_menu(cfg))
         return
 
-    if data == "ui:setchannel":
+    elif data == "ui:setchannel":
         await send_menu(update, cfg, tr(cfg, "ui_setchannel"))
         return
 
-    if data == "ui:addfeed":
+    elif data == "ui:addfeed":
         text = tr(cfg, "ui_addfeed") + "\n\n" + feeds_overview(cfg)
         try:
             await q.answer()
@@ -867,17 +880,17 @@ elif data == "ui:autoposttoggle":
             await q.message.reply_text(text=text, reply_markup=build_feeds_menu(cfg))
         return
 
-    if data == "ui:unsetchannel":
+    elif data == "ui:unsetchannel":
         cfg["channel"] = None
         save_client(user_id, cfg)
         await send_menu(update, cfg, "✅ Channel cleared.")
         return
 
-    if data == "ui:setstyle":
+    elif data == "ui:setstyle":
         await send_menu(update, cfg, tr(cfg, "ui_setstyle"))
         return
 
-    if data == "ui:showstyle":
+    elif data == "ui:showstyle":
         cpath = custom_style_path(user_id)
         if cpath.exists() and cpath.read_text(encoding="utf-8", errors="ignore").strip():
             style_name = "custom"
@@ -887,69 +900,65 @@ elif data == "ui:autoposttoggle":
         await send_menu(update, cfg, f"✍️ Current style ({style_name}):\n\n{style[:3000]}")
         return
 
-    if data == "ui:resetstyle":
+    elif data == "ui:resetstyle":
         cpath = custom_style_path(user_id)
         if cpath.exists():
             cpath.unlink()
         await send_menu(update, cfg, "✅ Custom style reset. Default style is active.")
         return
 
-    if data == "ui:schedule":
+    elif data == "ui:schedule":
         await send_menu(update, cfg, tr(cfg, "ui_schedule").format(schedule=schedule_summary(cfg)))
         return
 
-    if data == "ui:pay":
+    elif data == "ui:pay":
         await send_menu(update, cfg, tr(cfg, "ui_pay").format(pay=pay_line(update, cfg)))
         return
 
-    if data == "ui:materials":
+    elif data == "ui:materials":
         await send_menu(update, cfg, tr(cfg, "ui_materials"))
         return
-    if data == "ui:modes":
-        labels = {
-            "mode_rss_ai": ui_text(cfg, "mode_rss_ai"),
-            "mode_creative": ui_text(cfg, "mode_creative"),
-        }
-        await q.answer()
-        await q.message.reply_text(ui_text(cfg, "modes_title"), reply_markup=build_modes_menu(labels))
-        return
 
-    if data == "ui:modepick:rss":
+    elif data == "ui:modepick:rss":
         cfg["mode"] = "rss"
         save_client(user_id, cfg)
         await send_menu(update, cfg, mode_set_text(cfg, "rss"))
         return
 
-    if data == "ui:modepick:creator":
+    elif data == "ui:modepick:creator":
         if not creative_mode_allowed(cfg):
             labels = {"btn_payment": ui_text(cfg, "btn_payment")}
             await q.answer()
-            await q.message.reply_text(ui_text(cfg, "creative_locked") + "\n\n" + pay_line(update, cfg), reply_markup=build_payment_menu(labels))
+            await q.message.reply_text(
+                ui_text(cfg, "creative_locked") + "\n\n" + pay_line(update, cfg),
+                reply_markup=build_payment_menu(labels),
+            )
             return
         cfg["mode"] = "creator"
         save_client(user_id, cfg)
         await send_menu(update, cfg, mode_set_text(cfg, "creator"))
         return
 
-
-    if data.startswith("ui:delfeed:"):
+    elif data.startswith("ui:delfeed:"):
         raw_idx = data.split(":", 2)[2]
         try:
             idx = int(raw_idx) - 1
         except ValueError:
             await send_menu(update, cfg, "Wrong feed index.")
             return
+
         feeds = cfg.get("feeds", [])
         if idx < 0 or idx >= len(feeds):
             await send_menu(update, cfg, "Wrong feed index.")
             return
+
         removed = feeds.pop(idx)
         cfg["feeds"] = feeds
         save_client(user_id, cfg)
         await send_menu(update, cfg, f"✅ Deleted feed:\n{removed}\n\n{feeds_overview(cfg)}")
         return
 
-    if data.startswith("ui:mode:"):
+    elif data.startswith("ui:mode:"):
         mode = data.split(":", 2)[2]
         if mode in ("rss", "creator", "both"):
             cfg["mode"] = mode
@@ -957,28 +966,27 @@ elif data == "ui:autoposttoggle":
             await send_menu(update, cfg, mode_set_text(cfg, mode))
         return
 
-    if data == "ui:status":
+    elif data == "ui:status":
         await status_cmd(update, context)
         return
 
-    if data == "ui:preview":
+    elif data == "ui:preview":
         await previewonce_cmd(update, context)
         return
 
-    if data == "ui:fetchonce":
+    elif data == "ui:fetchonce":
         await fetchonce_cmd(update, context)
         return
 
-    if data == "ui:autoposton":
+    elif data == "ui:autoposton":
         await autoposton_cmd(update, context)
         return
 
-    if data == "ui:autopostoff":
+    elif data == "ui:autopostoff":
         await autopostoff_cmd(update, context)
         return
 
     await q.answer()
-
 async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
