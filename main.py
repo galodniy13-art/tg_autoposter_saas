@@ -797,7 +797,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:setup":
-    try:
+      try:
         await q.answer()
         await q.edit_message_text(
             text=ui_text(cfg, "setup_menu_title"),
