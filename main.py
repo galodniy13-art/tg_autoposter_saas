@@ -783,7 +783,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
-elif data.startswith("ui:setlang:"):
+    elif data.startswith("ui:setlang:"):
         choice = data.split(":", 2)[2].strip().lower()
         if choice in ("en", "ru"):
             cfg["language"] = choice
@@ -796,19 +796,19 @@ elif data.startswith("ui:setlang:"):
         await q.answer()
         return
 
-if data == "ui:setup":
+    if data == "ui:setup":
     try:
         await q.answer()
         await q.edit_message_text(
             text=ui_text(cfg, "setup_menu_title"),
             reply_markup=build_setup_menu(cfg),
-        )
-    except BadRequest:
+            )
+        except BadRequest:
         await q.message.reply_text(
             text=ui_text(cfg, "setup_menu_title"),
             reply_markup=build_setup_menu(cfg),
-        )
-    return
+            )
+        return
 
 elif data == "ui:backmain":
     await send_menu(
