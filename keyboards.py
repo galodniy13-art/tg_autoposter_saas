@@ -61,7 +61,8 @@ def build_main_menu_minimal(labels: dict) -> InlineKeyboardMarkup:
     )
 
 
-def build_setup_submenu(labels: dict) -> InlineKeyboardMarkup:
+def build_setup_submenu(labels: dict, autopost_enabled: bool) -> InlineKeyboardMarkup:
+    autopost_label = labels["btn_autopost_on"] if autopost_enabled else labels["btn_autopost_off"]
     return InlineKeyboardMarkup(
         [
             [

@@ -14,13 +14,15 @@ from dotenv import load_dotenv
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
-from keyboards import build_lang_keyboard, build_modes_menu, build_payment_menu
 from mode_ui import build_mode_buttons, mode_set_text
-from keyboards import build_lang_keyboard, build_setup_submenu
-from mode_ui import mode_set_text
-from keyboards import build_lang_keyboard, build_main_menu_minimal, build_setup_submenu
-from mode_ui import build_mode_buttons, mode_set_text
-from keyboards import build_lang_keyboard
+from keyboards import (
+    build_lang_keyboard,
+    build_main_menu_minimal,
+    build_setup_submenu,
+    build_modes_menu,
+    build_payment_menu,
+)
+
 from texts import TEXTS as UI_TEXTS
 from telegram.constants import ChatMemberStatus
 from telegram.error import BadRequest
@@ -633,19 +635,17 @@ def build_setup_menu(cfg: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
+def ui_pack(cfg: dict) -> dict:
+    lang = (cfg.get("language") or "en").lower()
+    return UI_TEXTS.get(lang, UI_TEXTS["en"])
+
+
+def build_main_menu_clean(cfg: dict) -> InlineKeyboardMarkup:
+    return build_main_menu_minimal(ui_pack(cfg))
+
+
 def build_setup_menu(cfg: dict) -> InlineKeyboardMarkup:
-    labels = {
-        "btn_setchannel": tr(cfg, "btn_setchannel"),
-        "btn_unsetchannel": tr(cfg, "btn_unsetchannel"),
-        "btn_addfeed": tr(cfg, "btn_addfeed"),
-        "btn_setstyle": tr(cfg, "btn_setstyle"),
-        "btn_showstyle": tr(cfg, "btn_showstyle"),
-        "btn_resetstyle": tr(cfg, "btn_resetstyle"),
-        "btn_back": ui_text(cfg, "btn_back"),
-        "btn_autopost_on": ui_text(cfg, "btn_autopost_on"),
-        "btn_autopost_off": ui_text(cfg, "btn_autopost_off"),
-    }
-    return build_setup_submenu(labels, bool(cfg.get("autopost_enabled")))
+    return build_setup_submenu(ui_pack(cfg), bool(cfg.get("autopost_enabled")))
 
 
 def build_lang_menu() -> InlineKeyboardMarkup:
@@ -653,7 +653,7 @@ def build_lang_menu() -> InlineKeyboardMarkup:
 
 
 async def reply_ui(update: Update, text: str, cfg: dict, show_menu: bool = True) -> None:
-    markup = build_main_menu(cfg) if show_menu else None
+    markup = build_main_menu_clean(cfg) if show_menu else None
 
     if update.callback_query:
         q = update.callback_query
@@ -802,17 +802,20 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
         return
 
-    if data == "ui:autoposttoggle":
+        if data == "ui:autoposttoggle":
         cfg["autopost_enabled"] = not bool(cfg.get("autopost_enabled"))
         save_client(user_id, cfg)
+        await q.answer()
         try:
-            await q.answer()
-            await q.edit_message_text(text=ui_text(cfg, "setup_menu_title"), reply_markup=build_setup_menu(cfg))
+            await q.edit_message_text(
+                text=ui_text(cfg, "setup_menu_title"),
+                reply_markup=build_setup_menu(cfg),
+            )
         except BadRequest:
-            await q.message.reply_text(text=ui_text(cfg, "setup_menu_title"), reply_markup=build_setup_menu(cfg))
-            await q.edit_message_text(text=tr(cfg, "setup_check"), reply_markup=build_setup_menu(cfg))
-        except BadRequest:
-            await q.message.reply_text(text=tr(cfg, "setup_check"), reply_markup=build_setup_menu(cfg))
+            await q.message.reply_text(
+                text=ui_text(cfg, "setup_menu_title"),
+                reply_markup=build_setup_menu(cfg),
+            )
         return
 
     if data == "ui:backmain":
@@ -823,7 +826,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         lang = (cfg.get("language") or "en").lower()
         if lang not in UI_TEXTS:
             lang = "en"
-        await send_menu(update, cfg, UI_TEXTS[lang]["modes_help"])
+        await send_menu(update, cfg, UI_TEXTS[lang].get("modes_help", UI_TEXTS["en"].get("modes_help", "")))
         return
 
     if data == "ui:help":
