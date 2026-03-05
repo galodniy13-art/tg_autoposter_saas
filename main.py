@@ -777,15 +777,21 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data == "ui:lang":
         await q.answer()
-        await q.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
+        await q.message.reply_text(
+            ui_text(cfg, "choose_lang"),
+            reply_markup=build_lang_menu(),
+        )
         return
 
-    if data.startswith("ui:setlang:"):
+elif data.startswith("ui:setlang:"):
         choice = data.split(":", 2)[2].strip().lower()
         if choice in ("en", "ru"):
             cfg["language"] = choice
             save_client(user_id, cfg)
-            await reply_ui(update, tr(cfg, "lang_set") + "\n\n" + tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg), cfg, show_menu=True)
+            await reply_ui(
+                update,
+                tr(cfg, "lang_set") + "\n\n" + tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg),
+            )
             return
         await q.answer()
         return
