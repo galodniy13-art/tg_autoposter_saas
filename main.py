@@ -272,27 +272,42 @@ def ui_text(cfg: dict, key: str) -> str:
     return UI_TEXTS[lang].get(key, UI_TEXTS["en"].get(key, key))
 
 
+def rss_mode_allowed(cfg: dict) -> bool:
+    return int(cfg.get("rss_daily_limit", 0) or 0) > 0
+
+
 def creative_mode_allowed(cfg: dict) -> bool:
-    return subscription_ok(cfg) and (cfg.get("subscription_plan") in {"PRO", "ELITE"})
+    return int(cfg.get("creative_daily_limit", 0) or 0) > 0
 
 
-async def enforce_creative_paywall(update: Update, cfg: dict) -> bool:
-    if creative_mode_allowed(cfg):
+def mode_limit(cfg: dict, mode: str) -> int:
+    if mode == "creator":
+        return int(cfg.get("creative_daily_limit", 0) or 0)
+    return int(cfg.get("rss_daily_limit", 0) or 0)
+
+
+def mode_access_allowed(cfg: dict, mode: str) -> bool:
+    return mode_limit(cfg, mode) > 0
+
+
+def mode_paywall_text(cfg: dict, mode: str) -> str:
+    if mode == "creator":
+        return ui_text(cfg, "creative_locked") + "\n\n" + ui_text(cfg, "creative_paywall")
+    return ui_text(cfg, "rss_locked") + "\n\n" + ui_text(cfg, "rss_paywall")
+
+
+async def enforce_mode_paywall(update: Update, cfg: dict, mode: str) -> bool:
+    if mode_access_allowed(cfg, mode):
         return True
 
     labels = {"btn_payment": ui_text(cfg, "btn_payment")}
+    text = mode_paywall_text(cfg, mode)
     if update.callback_query:
         q = update.callback_query
         await q.answer()
-        await q.message.reply_text(
-            ui_text(cfg, "creative_locked") + "\n\n" + pay_line(update, cfg),
-            reply_markup=build_payment_menu(labels),
-        )
+        await q.message.reply_text(text, reply_markup=build_payment_menu(labels))
     elif update.message:
-        await update.message.reply_text(
-            ui_text(cfg, "creative_locked") + "\n\n" + pay_line(update, cfg),
-            reply_markup=build_payment_menu(labels),
-        )
+        await update.message.reply_text(text, reply_markup=build_payment_menu(labels))
     return False
 
 def detect_lang(update: Update | None, cfg: dict | None = None) -> str:
@@ -337,6 +352,8 @@ DEFAULT_CLIENT = {
     "daily_limit": 10,
     "daily_count": 0,
     "daily_date": str(date.today()),
+    "rss_daily_limit": 0,
+    "creative_daily_limit": 0,
 
     "max_dedupe": 1500,
     "fetch_entries_per_feed": 15,
@@ -419,9 +436,9 @@ def ensure_daily_counter(cfg: dict) -> dict:
         cfg["daily_count"] = 0
     return cfg
 
-def can_post_more(cfg: dict) -> bool:
+def can_post_more(cfg: dict, mode: str) -> bool:
     cfg = ensure_daily_counter(cfg)
-    return int(cfg.get("daily_count", 0)) < int(cfg.get("daily_limit", 10))
+    return int(cfg.get("daily_count", 0)) < mode_limit(cfg, mode)
 
 def bump_daily_count(cfg: dict) -> None:
     cfg = ensure_daily_counter(cfg)
@@ -816,7 +833,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:mode:creative:menu":
-        if not await enforce_creative_paywall(update, cfg):
+        if not await enforce_mode_paywall(update, cfg, "creator"):
             return
         await q.answer()
         try:
@@ -826,6 +843,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:mode:rss:menu":
+        if not await enforce_mode_paywall(update, cfg, "rss"):
+            return
         await q.answer()
         try:
             await q.edit_message_text(text=ui_text(cfg, "rss_menu_title"), reply_markup=build_rss_submenu(cfg))
@@ -859,7 +878,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:creative:editprompt":
-        if not await enforce_creative_paywall(update, cfg):
+        if not await enforce_mode_paywall(update, cfg, "creator"):
             return
         current = get_style_prompt(user_id, cfg).strip()
         current_text = ui_text(cfg, "prompt_current").format(prompt=current[:1500]) if current else ui_text(cfg, "prompt_empty")
@@ -869,6 +888,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:rss:editprompt":
+        if not await enforce_mode_paywall(update, cfg, "rss"):
+            return
         current = get_style_prompt(user_id, cfg).strip()
         current_text = ui_text(cfg, "prompt_current").format(prompt=current[:1500]) if current else ui_text(cfg, "prompt_empty")
         context.user_data["awaiting_prompt_mode"] = "rss"
@@ -955,7 +976,9 @@ async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(UI_TEXTS["en"]["mode_usage"])
         return
 
-    if m == "creator" and not await enforce_creative_paywall(update, cfg):
+    if m == "creator" and not await enforce_mode_paywall(update, cfg, "creator"):
+        return
+    if m == "rss" and not await enforce_mode_paywall(update, cfg, "rss"):
         return
 
     cfg["mode"] = m
@@ -1383,11 +1406,13 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_id = update.effective_user.id
     cfg = load_client(user_id)
 
-    if not subscription_ok(cfg):
-        await reply_ui(update, pay_line(update, cfg), cfg, show_menu=True)
+    mode = cfg.get("mode")
+    required_mode = "creator" if mode == "creator" else "rss"
+    if not mode_access_allowed(cfg, required_mode):
+        await reply_ui(update, mode_paywall_text(cfg, required_mode), cfg, show_menu=True)
         return
 
-    if not can_post_more(cfg):
+    if not can_post_more(cfg, required_mode):
         await reply_ui(update, "Daily limit reached.", cfg, show_menu=True)
         return
 
@@ -1486,57 +1511,103 @@ async def autopostoff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await reply_ui(update, "🛑 Autopost OFF.", cfg, show_menu=True)
 
 # ===================== Admin commands =====================
-async def setsub_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def setrss_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     caller = update.effective_user.id
-    if caller not in OWNER_TELEGRAM_IDS:
-        await update.message.reply_text("Not authorized.")
+    if not is_admin(caller):
+        await update.message.reply_text(tr(load_client(caller), "admin_only"))
         return
 
-    if len(context.args) != 3:
-        await update.message.reply_text(
-            "Usage: /setsub <user_id> <plan> <days>\n"
-            "Plans: BASIC, PRO, ELITE, FREE"
-        )
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /setrss <user_id> <posts_per_day> [days]")
         return
 
-    uid_raw, plan_raw, days_raw = context.args[0].strip(), context.args[1].strip().upper(), context.args[2].strip()
-    allowed = {"BASIC", "PRO", "ELITE", "FREE"}
-
-    if not uid_raw.isdigit() or plan_raw not in allowed or not days_raw.isdigit():
-        await update.message.reply_text(
-            "Usage: /setsub <user_id> <plan> <days>\n"
-            "Plans: BASIC, PRO, ELITE, FREE"
-        )
-        return
-
-    days = int(days_raw)
-    if plan_raw in {"BASIC", "PRO", "ELITE"} and not (1 <= days <= 3650):
-        await update.message.reply_text(f"{plan_raw} days must be 1..3650")
-        return
-    if plan_raw == "FREE" and days != 0:
-        await update.message.reply_text("FREE supports only 0 days")
+    uid_raw, limit_raw = context.args[0].strip(), context.args[1].strip()
+    if not uid_raw.isdigit() or not limit_raw.isdigit():
+        await update.message.reply_text("Usage: /setrss <user_id> <posts_per_day> [days]")
         return
 
     uid = int(uid_raw)
+    limit = int(limit_raw)
+    if limit < 0 or limit > 5000:
+        await update.message.reply_text("posts_per_day range: 0..5000")
+        return
+
+    expires_text = "unchanged"
     cfg = load_client(uid)
-    cfg["subscription_plan"] = plan_raw
-
-    if plan_raw == "FREE" and days == 0:
-        cfg["subscription_until"] = None
-        expires_text = "INACTIVE"
-    else:
-        expires_dt = datetime.now(timezone.utc).date() + timedelta(days=days)
-        cfg["subscription_until"] = str(expires_dt)
-        expires_text = cfg["subscription_until"]
-
+    cfg["rss_daily_limit"] = limit
+    if len(context.args) >= 3:
+        days_raw = context.args[2].strip()
+        if not days_raw.isdigit():
+            await update.message.reply_text("Usage: /setrss <user_id> <posts_per_day> [days]")
+            return
+        days = int(days_raw)
+        if days == 0:
+            cfg["subscription_until"] = None
+            expires_text = "INACTIVE"
+        elif 1 <= days <= 3650:
+            cfg["subscription_until"] = str(date.today() + timedelta(days=days))
+            expires_text = cfg["subscription_until"]
+        else:
+            await update.message.reply_text("days range: 0..3650")
+            return
     save_client(uid, cfg)
-
     await update.message.reply_text(
-        "✅ Subscription updated\n"
+        "✅ Access updated\n"
         f"user_id: {uid}\n"
-        f"plan: {plan_raw}\n"
+        f"mode: RSS + AI\n"
+        f"daily_limit: {limit}\n"
         f"expires: {expires_text}"
     )
+
+
+async def setcreative_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    caller = update.effective_user.id
+    if not is_admin(caller):
+        await update.message.reply_text(tr(load_client(caller), "admin_only"))
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /setcreative <user_id> <posts_per_day> [days]")
+        return
+
+    uid_raw, limit_raw = context.args[0].strip(), context.args[1].strip()
+    if not uid_raw.isdigit() or not limit_raw.isdigit():
+        await update.message.reply_text("Usage: /setcreative <user_id> <posts_per_day> [days]")
+        return
+
+    uid = int(uid_raw)
+    limit = int(limit_raw)
+    if limit < 0 or limit > 5000:
+        await update.message.reply_text("posts_per_day range: 0..5000")
+        return
+
+    expires_text = "unchanged"
+    cfg = load_client(uid)
+    cfg["creative_daily_limit"] = limit
+    if len(context.args) >= 3:
+        days_raw = context.args[2].strip()
+        if not days_raw.isdigit():
+            await update.message.reply_text("Usage: /setcreative <user_id> <posts_per_day> [days]")
+            return
+        days = int(days_raw)
+        if days == 0:
+            cfg["subscription_until"] = None
+            expires_text = "INACTIVE"
+        elif 1 <= days <= 3650:
+            cfg["subscription_until"] = str(date.today() + timedelta(days=days))
+            expires_text = cfg["subscription_until"]
+        else:
+            await update.message.reply_text("days range: 0..3650")
+            return
+    save_client(uid, cfg)
+    await update.message.reply_text(
+        "✅ Access updated\n"
+        f"user_id: {uid}\n"
+        f"mode: Creative\n"
+        f"daily_limit: {limit}\n"
+        f"expires: {expires_text}"
+    )
+
 
 async def activate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     caller = update.effective_user.id
@@ -1597,8 +1668,8 @@ async def setlimit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     uid = int(uid_raw)
     limit = int(limit_raw)
-    if limit < 1 or limit > 5000:
-        await update.message.reply_text("Limit range: 1..5000")
+    if limit < 0 or limit > 5000:
+        await update.message.reply_text("Limit range: 0..5000")
         return
 
     cfg = load_client(uid)
@@ -1651,9 +1722,11 @@ async def autopost_loop(app: Application) -> None:
 
                 if not cfg.get("autopost_enabled"):
                     continue
-                if not subscription_ok(cfg):
+                mode = cfg.get("mode")
+                required_mode = "creator" if mode == "creator" else "rss"
+                if not mode_access_allowed(cfg, required_mode):
                     continue
-                if not can_post_more(cfg):
+                if not can_post_more(cfg, required_mode):
                     continue
 
                 channel = cfg.get("channel")
@@ -1674,7 +1747,6 @@ async def autopost_loop(app: Application) -> None:
                     if prev and (now - prev).total_seconds() < interval_min * 60:
                         continue
 
-                mode = cfg.get("mode")
                 feeds = cfg.get("feeds", [])
 
                 if mode == "creator":
@@ -1802,7 +1874,8 @@ def main() -> None:
     app.add_handler(CommandHandler("autopostoff", autopostoff_cmd))
 
     # admin
-    app.add_handler(CommandHandler("setsub", setsub_cmd))
+    app.add_handler(CommandHandler("setrss", setrss_cmd))
+    app.add_handler(CommandHandler("setcreative", setcreative_cmd))
     app.add_handler(CommandHandler("activate", activate_cmd))
     app.add_handler(CommandHandler("deactivate", deactivate_cmd))
     app.add_handler(CommandHandler("setlimit", setlimit_cmd))
