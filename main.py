@@ -13,6 +13,10 @@ import requests
 from dotenv import load_dotenv
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+
+from mode_ui import build_mode_buttons, mode_set_text
+from keyboards import build_lang_keyboard, build_main_menu_minimal, build_setup_submenu
+from texts import TEXTS as UI_TEXTS
 from telegram.constants import ChatMemberStatus
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -262,29 +266,9 @@ def detect_lang(update: Update | None, cfg: dict | None = None) -> str:
 
 
 def subscription_offer_text(lang: str) -> str:
-    contact = PAY_CONTACTS or "@admin"
-    if lang == "ru":
-        return (
-            "🔒 Для этой функции нужна активная подписка.\n"
-            "Тарифы:\n"
-            f"• BASIC — {BASIC_RUB}₽/мес (1 канал, RSS, до 2 постов/день)\n"
-            f"• PRO — {PRO_RUB}₽/мес (до 3 каналов, RSS + Креатив, до 5 постов/день)\n"
-            f"• ELITE — {ELITE_RUB}₽/мес (больше каналов, расширенное расписание, приоритетная поддержка)\n"
-            "• TRIAL — 7 дней бесплатно\n"
-            f"Старт: напишите {contact}"
-        )
-
-    return (
-        "🔒 This feature requires an active subscription.\n"
-        "Plans:\n"
-        f"• BASIC — ${BASIC_USD}/mo (1 channel, RSS, up to 2 posts/day)\n"
-        f"• PRO — ${PRO_USD}/mo (up to 3 channels, RSS + Creative, up to 5 posts/day)\n"
-        f"• ELITE — ${ELITE_USD}/mo (more channels, advanced scheduling, priority support)\n"
-        "• TRIAL — 7 days free\n"
-        f"Start: message {contact}"
-    )
-
-
+    if lang not in UI_TEXTS:
+        lang = "en"
+    return UI_TEXTS[lang]["payment_offer"]
 def pay_line(update: Update | None, cfg: dict) -> str:
     lang = detect_lang(update, cfg)
     return subscription_offer_text(lang)
@@ -587,6 +571,7 @@ def build_main_menu(cfg: dict) -> InlineKeyboardMarkup:
     keyboard = [
         [InlineKeyboardButton(tr(cfg, "btn_lang"), callback_data="ui:lang")],
         [InlineKeyboardButton(tr(cfg, "btn_setup"), callback_data="ui:setup")],
+        build_mode_buttons(cfg),
         [
             InlineKeyboardButton(tr(cfg, "btn_setchannel"), callback_data="ui:setchannel"),
             InlineKeyboardButton(tr(cfg, "btn_unsetchannel"), callback_data="ui:unsetchannel"),
@@ -617,17 +602,25 @@ def build_main_menu(cfg: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
+def ui_pack(cfg: dict) -> dict:
+    lang = (cfg.get("language") or "en").lower()
+    return UI_TEXTS.get(lang, UI_TEXTS["en"])
+
+
+def build_main_menu_clean(cfg: dict) -> InlineKeyboardMarkup:
+    return build_main_menu_minimal(ui_pack(cfg))
+
+
+def build_setup_menu(cfg: dict) -> InlineKeyboardMarkup:
+    return build_setup_submenu(ui_pack(cfg), bool(cfg.get("autopost_enabled")))
+
+
 def build_lang_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("🇬🇧 English", callback_data="ui:setlang:en")],
-            [InlineKeyboardButton("🇷🇺 Русский", callback_data="ui:setlang:ru")],
-        ]
-    )
+    return build_lang_keyboard()
 
 
 async def reply_ui(update: Update, text: str, cfg: dict, show_menu: bool = True) -> None:
-    markup = build_main_menu(cfg) if show_menu else None
+    markup = build_main_menu_clean(cfg) if show_menu else None
 
     if update.callback_query:
         q = update.callback_query
@@ -691,7 +684,7 @@ async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     cfg["language"] = choice
     save_client(user_id, cfg)
-    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
+    await send_menu(update, cfg, ui_pack(cfg)["help_screen"])
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -726,7 +719,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def materials_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
-    await send_menu(update, cfg, tr(cfg, "ui_materials"))
+    await send_menu(update, cfg, ui_pack(cfg)["help_screen"])
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -737,7 +730,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(TEXTS["en"]["choose_lang"], reply_markup=build_lang_menu())
         return
 
-    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
+    await send_menu(update, cfg, ui_pack(cfg)["help_screen"])
 
 async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
@@ -762,7 +755,42 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:setup":
-        await send_menu(update, cfg, tr(cfg, "setup_check"))
+        try:
+            await q.answer()
+            await q.edit_message_text(text=ui_pack(cfg)["setup_title"], reply_markup=build_setup_menu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=ui_pack(cfg)["setup_title"], reply_markup=build_setup_menu(cfg))
+        return
+
+    if data == "ui:backmain":
+        await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
+        return
+
+    if data == "ui:help":
+        await send_menu(update, cfg, ui_pack(cfg)["help_screen"])
+        return
+
+    if data == "ui:modes":
+        await send_menu(update, cfg, UI_TEXTS["en"]["mode_usage"])
+        return
+
+    if data == "ui:feedsdelete":
+        text = feeds_overview(cfg)
+        try:
+            await q.answer()
+            await q.edit_message_text(text=text, reply_markup=build_feeds_menu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_feeds_menu(cfg))
+        return
+
+    if data == "ui:autoposttoggle":
+        cfg["autopost_enabled"] = not bool(cfg.get("autopost_enabled"))
+        save_client(user_id, cfg)
+        try:
+            await q.answer()
+            await q.edit_message_text(text=ui_pack(cfg)["setup_title"], reply_markup=build_setup_menu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=ui_pack(cfg)["setup_title"], reply_markup=build_setup_menu(cfg))
         return
 
     if data == "ui:setchannel":
@@ -814,7 +842,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:materials":
-        await send_menu(update, cfg, tr(cfg, "ui_materials"))
+        await send_menu(update, cfg, ui_pack(cfg)["help_screen"])
         return
 
     if data.startswith("ui:delfeed:"):
@@ -832,6 +860,14 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         cfg["feeds"] = feeds
         save_client(user_id, cfg)
         await send_menu(update, cfg, f"✅ Deleted feed:\n{removed}\n\n{feeds_overview(cfg)}")
+        return
+
+    if data.startswith("ui:mode:"):
+        mode = data.split(":", 2)[2]
+        if mode in ("rss", "creator", "both"):
+            cfg["mode"] = mode
+            save_client(user_id, cfg)
+            await send_menu(update, cfg, mode_set_text(cfg, mode))
         return
 
     if data == "ui:status":
@@ -871,17 +907,17 @@ async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cfg = load_client(user_id)
 
     if not context.args:
-        await update.message.reply_text("Usage: /mode rss OR /mode creator OR /mode both")
+        await update.message.reply_text(UI_TEXTS["en"]["mode_usage"])
         return
 
     m = context.args[0].strip().lower()
     if m not in ("rss", "creator", "both"):
-        await update.message.reply_text("Usage: /mode rss OR /mode creator OR /mode both")
+        await update.message.reply_text(UI_TEXTS["en"]["mode_usage"])
         return
 
     cfg["mode"] = m
     save_client(user_id, cfg)
-    await update.message.reply_text(f"✅ Mode set: {m}")
+    await update.message.reply_text(mode_set_text(cfg, m))
 
 async def setprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -1383,24 +1419,21 @@ async def setsub_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if len(context.args) != 3:
         await update.message.reply_text(
             "Usage: /setsub <user_id> <plan> <days>\n"
-            "Plans: BASIC, PRO, ELITE, TRIAL, FREE"
+            "Plans: BASIC, PRO, ELITE, FREE"
         )
         return
 
     uid_raw, plan_raw, days_raw = context.args[0].strip(), context.args[1].strip().upper(), context.args[2].strip()
-    allowed = {"BASIC", "PRO", "ELITE", "TRIAL", "FREE"}
+    allowed = {"BASIC", "PRO", "ELITE", "FREE"}
 
     if not uid_raw.isdigit() or plan_raw not in allowed or not days_raw.isdigit():
         await update.message.reply_text(
             "Usage: /setsub <user_id> <plan> <days>\n"
-            "Plans: BASIC, PRO, ELITE, TRIAL, FREE"
+            "Plans: BASIC, PRO, ELITE, FREE"
         )
         return
 
     days = int(days_raw)
-    if plan_raw == "TRIAL" and not (1 <= days <= 30):
-        await update.message.reply_text("TRIAL days must be 1..30")
-        return
     if plan_raw in {"BASIC", "PRO", "ELITE"} and not (1 <= days <= 3650):
         await update.message.reply_text(f"{plan_raw} days must be 1..3650")
         return
