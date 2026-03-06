@@ -2,7 +2,7 @@ TEXTS = {
     "en": {
         "welcome": "Welcome!",
         "menu_title": "Menu. Choose an action:",
-        "mode_usage": "Usage: /mode rss OR /mode creator OR /mode both",
+        "mode_usage": "Usage: /mode rss OR /mode creator",
         "payment_offer":
             "🔒 This feature requires an active subscription.\n"
             "Plans (EUR):\n"
@@ -40,7 +40,7 @@ TEXTS = {
         "btn_on": "🤖 Autopost ON",
         "btn_off": "🛑 OFF",
         "btn_back": "⬅ Back",
-        "modes_help": "Choose mode with commands:\n/mode rss\n/mode creator\n/mode both",
+        "modes_help": "Choose mode with commands:\n/mode rss\n/mode creator",
         "start_welcome": (
             "👋 Welcome to AI autoposting for influencers.\n\n"
             "This bot helps you publish on Telegram using AI in two modes:\n"
@@ -55,7 +55,7 @@ TEXTS = {
     "ru": {
         "welcome": "Добро пожаловать!",
         "menu_title": "Меню. Выберите действие:",
-        "mode_usage": "Использование: /mode rss ИЛИ /mode creator ИЛИ /mode both",
+        "mode_usage": "Использование: /mode rss ИЛИ /mode creator",
         "payment_offer":
             "🔒 Для этой функции нужна активная подписка.\n"
             "Тарифы (EUR):\n"
@@ -93,7 +93,7 @@ TEXTS = {
         "btn_on": "🤖 Автопост ВКЛ",
         "btn_off": "🛑 ВЫКЛ",
         "btn_back": "⬅ Назад",
-        "modes_help": "Выберите режим командами:\n/mode rss\n/mode creator\n/mode both",
+        "modes_help": "Выберите режим командами:\n/mode rss\n/mode creator",
         "start_welcome": (
             "👋 Добро пожаловать в AI-автопостинг для инфлюенсеров.\n\n"
             "Бот помогает публиковать в Telegram с помощью ИИ в двух режимах:\n"

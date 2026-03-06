@@ -63,14 +63,21 @@ if _raw_owner_ids:
         if x.isdigit():
             OWNER_TELEGRAM_IDS.add(int(x))
 
-# Pricing constants
-BASIC_USD = env_int("BASIC_USD", 9)
-PRO_USD = env_int("PRO_USD", 19)
-ELITE_USD = env_int("ELITE_USD", 39)
+# Pricing/plan constants
+BASIC_EUR = 9
+PRO_EUR = 19
+ELITE_EUR = 39
 
-BASIC_RUB = env_int("BASIC_RUB", 990)
-PRO_RUB = env_int("PRO_RUB", 1990)
-ELITE_RUB = env_int("ELITE_RUB", 3990)
+BASIC_DAILY_LIMIT = 5
+PRO_DAILY_LIMIT = 10
+ELITE_DAILY_LIMIT = 30
+
+PLAN_RULES = {
+    "FREE": {"daily_limit": 0, "allow_creator": False},
+    "BASIC": {"daily_limit": BASIC_DAILY_LIMIT, "allow_creator": False},
+    "PRO": {"daily_limit": PRO_DAILY_LIMIT, "allow_creator": True},
+    "ELITE": {"daily_limit": ELITE_DAILY_LIMIT, "allow_creator": True},
+}
 
 # Admin IDs: comma separated list, example: "123,456"
 ADMIN_IDS = set()
@@ -268,7 +275,19 @@ def ui_text(cfg: dict, key: str) -> str:
 
 
 def creative_mode_allowed(cfg: dict) -> bool:
-    return subscription_ok(cfg) and (cfg.get("subscription_plan") in {"PRO", "ELITE"})
+    plan = get_subscription_plan(cfg)
+    return subscription_ok(cfg) and bool(PLAN_RULES[plan]["allow_creator"])
+
+
+def get_subscription_plan(cfg: dict) -> str:
+    plan = str(cfg.get("subscription_plan") or "FREE").strip().upper()
+    return plan if plan in PLAN_RULES else "FREE"
+
+
+def apply_plan_limits(cfg: dict) -> None:
+    plan = get_subscription_plan(cfg)
+    cfg["subscription_plan"] = plan
+    cfg["daily_limit"] = PLAN_RULES[plan]["daily_limit"]
 
 def detect_lang(update: Update | None, cfg: dict | None = None) -> str:
     cfg = cfg or {}
@@ -291,6 +310,12 @@ def pay_line(update: Update | None, cfg: dict) -> str:
     lang = detect_lang(update, cfg)
     return subscription_offer_text(lang)
 
+
+def paywall_text(update: Update | None, cfg: dict, require_creator: bool = False) -> str:
+    if require_creator and not PLAN_RULES[get_subscription_plan(cfg)]["allow_creator"]:
+        return ui_text(cfg, "creative_locked") + "\n\n" + pay_line(update, cfg)
+    return pay_line(update, cfg)
+
 # ===================== Default client config =====================
 DEFAULT_CLIENT = {
     "language": None,  # "en" / "ru"
@@ -309,7 +334,7 @@ DEFAULT_CLIENT = {
     "last_schedule_date": None,
     "last_schedule_time": None,
 
-    "daily_limit": 10,
+    "daily_limit": BASIC_DAILY_LIMIT,
     "daily_count": 0,
     "daily_date": str(date.today()),
 
@@ -352,6 +377,7 @@ def load_client(user_id: int) -> dict:
 
     for k, v in DEFAULT_CLIENT.items():
         cfg.setdefault(k, v)
+    apply_plan_limits(cfg)
     return cfg
 
 def save_client(user_id: int, cfg: dict) -> None:
@@ -396,7 +422,9 @@ def ensure_daily_counter(cfg: dict) -> dict:
 
 def can_post_more(cfg: dict) -> bool:
     cfg = ensure_daily_counter(cfg)
-    return int(cfg.get("daily_count", 0)) < int(cfg.get("daily_limit", 10))
+    plan_limit = PLAN_RULES[get_subscription_plan(cfg)]["daily_limit"]
+    cfg["daily_limit"] = plan_limit
+    return int(cfg.get("daily_count", 0)) < int(plan_limit)
 
 def bump_daily_count(cfg: dict) -> None:
     cfg = ensure_daily_counter(cfg)
@@ -930,7 +958,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             labels = {"btn_payment": ui_text(cfg, "btn_payment")}
             await q.answer()
             await q.message.reply_text(
-                ui_text(cfg, "creative_locked") + "\n\n" + pay_line(update, cfg),
+                paywall_text(update, cfg, require_creator=True),
                 reply_markup=build_payment_menu(labels),
             )
             return
@@ -960,7 +988,10 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     elif data.startswith("ui:mode:"):
         mode = data.split(":", 2)[2]
-        if mode in ("rss", "creator", "both"):
+        if mode in ("rss", "creator"):
+            if mode == "creator" and not creative_mode_allowed(cfg):
+                await send_menu(update, cfg, paywall_text(update, cfg, require_creator=True))
+                return
             cfg["mode"] = mode
             save_client(user_id, cfg)
             await send_menu(update, cfg, mode_set_text(cfg, mode))
@@ -1006,8 +1037,12 @@ async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     m = context.args[0].strip().lower()
-    if m not in ("rss", "creator", "both"):
+    if m not in ("rss", "creator"):
         await update.message.reply_text(UI_TEXTS["en"]["mode_usage"])
+        return
+
+    if m == "creator" and not creative_mode_allowed(cfg):
+        await update.message.reply_text(paywall_text(update, cfg, require_creator=True))
         return
 
     cfg["mode"] = m
@@ -1493,6 +1528,12 @@ async def interval_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def autoposton_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
+    if not subscription_ok(cfg):
+        await reply_ui(update, paywall_text(update, cfg), cfg, show_menu=True)
+        return
+    if cfg.get("mode") == "creator" and not creative_mode_allowed(cfg):
+        await reply_ui(update, paywall_text(update, cfg, require_creator=True), cfg, show_menu=True)
+        return
     cfg["autopost_enabled"] = True
     save_client(user_id, cfg)
     await reply_ui(update, "🤖 Autopost ON.", cfg, show_menu=True)
@@ -1695,6 +1736,9 @@ async def autopost_loop(app: Application) -> None:
 
                 mode = cfg.get("mode")
                 feeds = cfg.get("feeds", [])
+
+                if mode == "creator" and not creative_mode_allowed(cfg):
+                    continue
 
                 if mode == "creator":
                     msg = creator_make_post(user_id, cfg)
