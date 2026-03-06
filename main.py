@@ -270,6 +270,26 @@ def ui_text(cfg: dict, key: str) -> str:
 def creative_mode_allowed(cfg: dict) -> bool:
     return subscription_ok(cfg) and (cfg.get("subscription_plan") in {"PRO", "ELITE"})
 
+
+async def enforce_creative_paywall(update: Update, cfg: dict) -> bool:
+    if creative_mode_allowed(cfg):
+        return True
+
+    labels = {"btn_payment": ui_text(cfg, "btn_payment")}
+    if update.callback_query:
+        q = update.callback_query
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "creative_locked") + "\n\n" + pay_line(update, cfg),
+            reply_markup=build_payment_menu(labels),
+        )
+    elif update.message:
+        await update.message.reply_text(
+            ui_text(cfg, "creative_locked") + "\n\n" + pay_line(update, cfg),
+            reply_markup=build_payment_menu(labels),
+        )
+    return False
+
 def detect_lang(update: Update | None, cfg: dict | None = None) -> str:
     cfg = cfg or {}
     user = update.effective_user if update else None
@@ -922,21 +942,15 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     elif data == "ui:modepick:rss":
         cfg["mode"] = "rss"
         save_client(user_id, cfg)
-        await send_menu(update, cfg, mode_set_text(cfg, "rss"))
+        await send_menu(update, cfg, ui_text(cfg, "mode_set_rss"))
         return
 
     elif data == "ui:modepick:creator":
-        if not creative_mode_allowed(cfg):
-            labels = {"btn_payment": ui_text(cfg, "btn_payment")}
-            await q.answer()
-            await q.message.reply_text(
-                ui_text(cfg, "creative_locked") + "\n\n" + pay_line(update, cfg),
-                reply_markup=build_payment_menu(labels),
-            )
+        if not await enforce_creative_paywall(update, cfg):
             return
         cfg["mode"] = "creator"
         save_client(user_id, cfg)
-        await send_menu(update, cfg, mode_set_text(cfg, "creator"))
+        await send_menu(update, cfg, ui_text(cfg, "mode_set_creator"))
         return
 
     elif data.startswith("ui:delfeed:"):
@@ -1010,9 +1024,17 @@ async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(UI_TEXTS["en"]["mode_usage"])
         return
 
+    if m == "creator" and not await enforce_creative_paywall(update, cfg):
+        return
+
     cfg["mode"] = m
     save_client(user_id, cfg)
-    await update.message.reply_text(mode_set_text(cfg, m))
+    if m == "rss":
+        await update.message.reply_text(ui_text(cfg, "mode_set_rss"))
+    elif m == "creator":
+        await update.message.reply_text(ui_text(cfg, "mode_set_creator"))
+    else:
+        await update.message.reply_text(mode_set_text(cfg, m))
 
 async def setprofile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
