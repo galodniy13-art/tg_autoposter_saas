@@ -26,6 +26,7 @@ from keyboards import (
     build_rss_ai_menu,
     build_feed_management_menu,
     build_feed_delete_menu,
+    build_channel_delete_menu,
 )
 
 from texts import TEXTS as UI_TEXTS
@@ -339,6 +340,7 @@ DEFAULT_CLIENT = {
     "creator_profile": "",
 
     "channel": None,
+    "channel_slots": 0,
     "feeds": [],
     "posted_urls": [],
 
@@ -725,6 +727,21 @@ def build_feeds_delete_menu(cfg: dict) -> InlineKeyboardMarkup:
     return build_feed_delete_menu(ui_pack(cfg), cfg.get("feeds", []))
 
 
+def channels_overview(cfg: dict) -> str:
+    channels = [cfg.get("channel")] if cfg.get("channel") else []
+    slots = int(cfg.get("channel_slots", 0) or 0)
+    if not channels:
+        return ui_text(cfg, "channels_empty_state").format(slots=slots)
+    return ui_text(cfg, "channels_list_title").format(count=len(channels), slots=slots) + "\n" + "\n".join(
+        [f"{i+1}) {ch}" for i, ch in enumerate(channels)]
+    )
+
+
+def build_channel_delete_selection_menu(cfg: dict) -> InlineKeyboardMarkup:
+    channels = [cfg.get("channel")] if cfg.get("channel") else []
+    return build_channel_delete_menu(ui_pack(cfg), channels)
+
+
 # ===================== Commands =====================
 async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -826,11 +843,12 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:setup:channels":
+        text = ui_text(cfg, "channel_management_title") + "\n\n" + channels_overview(cfg)
         await q.answer()
         try:
-            await q.edit_message_text(text=ui_text(cfg, "channel_management_title"), reply_markup=build_channel_menu(cfg))
+            await q.edit_message_text(text=text, reply_markup=build_channel_menu(cfg))
         except BadRequest:
-            await q.message.reply_text(text=ui_text(cfg, "channel_management_title"), reply_markup=build_channel_menu(cfg))
+            await q.message.reply_text(text=text, reply_markup=build_channel_menu(cfg))
         return
 
     if data == "ui:modes":
@@ -907,6 +925,13 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:setchannel":
+        channels = [cfg.get("channel")] if cfg.get("channel") else []
+        slots = int(cfg.get("channel_slots", 0) or 0)
+        if len(channels) >= slots:
+            text = ui_text(cfg, "channel_slots_limit").format(count=len(channels), slots=slots)
+            await q.answer()
+            await q.message.reply_text(text)
+            return
         await send_menu(update, cfg, tr(cfg, "ui_setchannel"))
         return
 
@@ -917,13 +942,54 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:unsetchannel":
-        if cfg.get("channel"):
-            cfg["channel"] = None
-            save_client(user_id, cfg)
-            await send_menu(update, cfg, ui_text(cfg, "channel_deleted"))
-        else:
-            await send_menu(update, cfg, ui_text(cfg, "channel_empty"))
+        channels = [cfg.get("channel")] if cfg.get("channel") else []
+        if not channels:
+            text = ui_text(cfg, "channel_management_title") + "\n\n" + channels_overview(cfg)
+            await q.answer()
+            try:
+                await q.edit_message_text(text=text, reply_markup=build_channel_menu(cfg))
+            except BadRequest:
+                await q.message.reply_text(text=text, reply_markup=build_channel_menu(cfg))
+            return
+
+        text = ui_text(cfg, "channel_choose_delete") + "\n\n" + channels_overview(cfg)
+        await q.answer()
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_channel_delete_selection_menu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_channel_delete_selection_menu(cfg))
         return
+
+    if data.startswith("ui:delchannel:"):
+        raw_idx = data.split(":", 2)[2]
+        try:
+            idx = int(raw_idx) - 1
+        except ValueError:
+            await q.answer()
+            return
+
+        channels = [cfg.get("channel")] if cfg.get("channel") else []
+        if idx < 0 or idx >= len(channels):
+            await q.answer()
+            return
+
+        removed = channels[idx]
+        cfg["channel"] = None
+        save_client(user_id, cfg)
+        text = (
+            ui_text(cfg, "channel_deleted_named").format(channel=removed)
+            + "\n\n"
+            + ui_text(cfg, "channel_management_title")
+            + "\n\n"
+            + channels_overview(cfg)
+        )
+        await q.answer()
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_channel_menu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_channel_menu(cfg))
+        return
+
 
     if data.startswith("ui:delfeed:"):
         raw_idx = data.split(":", 2)[2]
@@ -1031,6 +1097,12 @@ async def setstyle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def setchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
+
+    channels = [cfg.get("channel")] if cfg.get("channel") else []
+    slots = int(cfg.get("channel_slots", 0) or 0)
+    if len(channels) >= slots:
+        await send_menu(update, cfg, ui_text(cfg, "channel_slots_limit").format(count=len(channels), slots=slots))
+        return
 
     if not context.args:
         await update.message.reply_text("Usage: /setchannel @channelusername")
@@ -1687,6 +1759,55 @@ async def setlimit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     save_client(uid, cfg)
     await update.message.reply_text(f"✅ User {uid} daily_limit set to {limit}")
 
+async def setchannels_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    caller = update.effective_user.id
+    if not is_admin(caller):
+        await update.message.reply_text(tr(load_client(caller), "admin_only"))
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /setchannels <user_id> <count> [days]")
+        return
+
+    uid_raw, count_raw = context.args[0].strip(), context.args[1].strip()
+    if not uid_raw.isdigit() or not count_raw.isdigit():
+        await update.message.reply_text("Usage: /setchannels <user_id> <count> [days]")
+        return
+
+    uid = int(uid_raw)
+    count = int(count_raw)
+    if count < 0 or count > 5000:
+        await update.message.reply_text("count range: 0..5000")
+        return
+
+    expires_text = "unchanged"
+    cfg = load_client(uid)
+    cfg["channel_slots"] = count
+    if len(context.args) >= 3:
+        days_raw = context.args[2].strip()
+        if not days_raw.isdigit():
+            await update.message.reply_text("Usage: /setchannels <user_id> <count> [days]")
+            return
+        days = int(days_raw)
+        if days == 0:
+            cfg["subscription_until"] = None
+            expires_text = "INACTIVE"
+        elif 1 <= days <= 3650:
+            cfg["subscription_until"] = str(date.today() + timedelta(days=days))
+            expires_text = cfg["subscription_until"]
+        else:
+            await update.message.reply_text("days range: 0..3650")
+            return
+
+    save_client(uid, cfg)
+    await update.message.reply_text(
+        "✅ Channel slots updated\n"
+        f"user_id: {uid}\n"
+        f"channel_slots: {count}\n"
+        f"expires: {expires_text}"
+    )
+
+
 async def setinterval_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     caller = update.effective_user.id
     if not is_admin(caller):
@@ -1889,6 +2010,7 @@ def main() -> None:
     app.add_handler(CommandHandler("activate", activate_cmd))
     app.add_handler(CommandHandler("deactivate", deactivate_cmd))
     app.add_handler(CommandHandler("setlimit", setlimit_cmd))
+    app.add_handler(CommandHandler("setchannels", setchannels_cmd))
     app.add_handler(CommandHandler("setinterval", setinterval_admin_cmd))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_text_handler))

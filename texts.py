@@ -80,6 +80,11 @@ TEXTS = {
         "feed_deleted": "✅ Feed deleted.",
         "channel_deleted": "✅ Channel removed.",
         "channel_empty": "No channel configured.",
+        "channels_list_title": "Saved channels ({count}/{slots}):",
+        "channels_empty_state": "No saved channels yet.\nSlots available: {slots}.",
+        "channel_choose_delete": "Choose a channel to delete:",
+        "channel_deleted_named": "✅ Channel removed: {channel}",
+        "channel_slots_limit": "Channel limit reached ({count}/{slots}). Buy/add channel capacity to connect more channels.",
         "start_welcome": (
             "👋 Welcome to AI autoposting for influencers.\n\n"
             "This bot helps you publish on Telegram using AI in two modes:\n"
@@ -172,6 +177,11 @@ TEXTS = {
         "feed_deleted": "✅ Лента удалена.",
         "channel_deleted": "✅ Канал удалён.",
         "channel_empty": "Канал не настроен.",
+        "channels_list_title": "Сохранённые каналы ({count}/{slots}):",
+        "channels_empty_state": "Пока нет сохранённых каналов.\nДоступно слотов: {slots}.",
+        "channel_choose_delete": "Выберите канал для удаления:",
+        "channel_deleted_named": "✅ Канал удалён: {channel}",
+        "channel_slots_limit": "Достигнут лимит каналов ({count}/{slots}). Увеличьте доступ, чтобы добавить ещё канал.",
         "start_welcome": (
             "👋 Добро пожаловать в AI-автопостинг для инфлюенсеров.\n\n"
             "Бот помогает публиковать в Telegram с помощью ИИ в двух режимах:\n"
