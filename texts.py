@@ -41,6 +41,7 @@ TEXTS = {
         "btn_off": "🛑 OFF",
         "btn_back": "⬅ Back",
         "modes_help": "Choose mode with commands:\n/mode rss\n/mode creator\n/mode both",
+        "admin_env_note": "Railway env var: ADMIN_IDS=123456789,987654321",
         "start_welcome": (
             "👋 Welcome to AI autoposting for influencers.\n\n"
             "This bot helps you publish on Telegram using AI in two modes:\n"
@@ -94,6 +95,7 @@ TEXTS = {
         "btn_off": "🛑 ВЫКЛ",
         "btn_back": "⬅ Назад",
         "modes_help": "Выберите режим командами:\n/mode rss\n/mode creator\n/mode both",
+        "admin_env_note": "Переменная Railway: ADMIN_IDS=123456789,987654321",
         "start_welcome": (
             "👋 Добро пожаловать в AI-автопостинг для инфлюенсеров.\n\n"
             "Бот помогает публиковать в Telegram с помощью ИИ в двух режимах:\n"

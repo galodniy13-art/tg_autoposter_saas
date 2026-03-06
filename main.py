@@ -73,6 +73,8 @@ PRO_RUB = env_int("PRO_RUB", 1990)
 ELITE_RUB = env_int("ELITE_RUB", 3990)
 
 # Admin IDs: comma separated list, example: "123,456"
+# Railway Variables required for admin commands:
+# ADMIN_IDS=123456789,987654321
 ADMIN_IDS = set()
 _raw_admins = os.getenv("ADMIN_IDS", "").strip()
 if _raw_admins:
@@ -1507,46 +1509,39 @@ async def autopostoff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ===================== Admin commands =====================
 async def setsub_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     caller = update.effective_user.id
-    if caller not in OWNER_TELEGRAM_IDS:
-        await update.message.reply_text("Not authorized.")
+    if not is_admin(caller):
+        await update.message.reply_text("Not authorized")
         return
 
-    if len(context.args) != 3:
+    if len(context.args) not in (2, 3):
         await update.message.reply_text(
-            "Usage: /setsub <user_id> <plan> <days>\n"
-            "Plans: BASIC, PRO, ELITE, FREE"
+            "Usage: /setsub <user_id> <basic|pro|elite> [days]"
         )
         return
 
-    uid_raw, plan_raw, days_raw = context.args[0].strip(), context.args[1].strip().upper(), context.args[2].strip()
-    allowed = {"BASIC", "PRO", "ELITE", "FREE"}
+    uid_raw = context.args[0].strip()
+    plan_raw = context.args[1].strip().upper()
+    days_raw = context.args[2].strip() if len(context.args) == 3 else "30"
+    allowed = {"BASIC", "PRO", "ELITE"}
 
     if not uid_raw.isdigit() or plan_raw not in allowed or not days_raw.isdigit():
         await update.message.reply_text(
-            "Usage: /setsub <user_id> <plan> <days>\n"
-            "Plans: BASIC, PRO, ELITE, FREE"
+            "Usage: /setsub <user_id> <basic|pro|elite> [days]"
         )
         return
 
     days = int(days_raw)
-    if plan_raw in {"BASIC", "PRO", "ELITE"} and not (1 <= days <= 3650):
+    if not (1 <= days <= 3650):
         await update.message.reply_text(f"{plan_raw} days must be 1..3650")
-        return
-    if plan_raw == "FREE" and days != 0:
-        await update.message.reply_text("FREE supports only 0 days")
         return
 
     uid = int(uid_raw)
     cfg = load_client(uid)
     cfg["subscription_plan"] = plan_raw
 
-    if plan_raw == "FREE" and days == 0:
-        cfg["subscription_until"] = None
-        expires_text = "INACTIVE"
-    else:
-        expires_dt = datetime.now(timezone.utc).date() + timedelta(days=days)
-        cfg["subscription_until"] = str(expires_dt)
-        expires_text = cfg["subscription_until"]
+    expires_dt = datetime.now(timezone.utc).date() + timedelta(days=days)
+    cfg["subscription_until"] = str(expires_dt)
+    expires_text = cfg["subscription_until"]
 
     save_client(uid, cfg)
 
