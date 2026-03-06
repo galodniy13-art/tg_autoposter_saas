@@ -79,11 +79,7 @@ def build_setup_submenu(labels: dict, autopost_enabled: bool) -> InlineKeyboardM
                 InlineKeyboardButton(labels["btn_showstyle"], callback_data="ui:showstyle"),
             ],
             [InlineKeyboardButton(labels["btn_resetstyle"], callback_data="ui:resetstyle")],
-            [InlineKeyboardButton(toggle_label, callback_data="ui:autoposttoggle")],
-            [
-                InlineKeyboardButton(labels["btn_on"], callback_data="ui:autoposton"),
-                InlineKeyboardButton(labels["btn_off"], callback_data="ui:autopostoff"),
-            ],
+            [InlineKeyboardButton(autopost_label, callback_data="ui:autoposttoggle")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:backmain")],
         ]
     )
