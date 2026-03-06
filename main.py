@@ -472,6 +472,15 @@ def get_style_prompt(user_id: int, cfg: dict) -> str:
         "Не выдумывай факты.\n"
     )
 
+
+def get_mode_prompt(user_id: int, cfg: dict, mode: str) -> str:
+    key = "creative_prompt" if mode == "creative" else "rss_prompt"
+    prompt = (cfg.get(key) or "").strip()
+    if prompt:
+        return prompt
+    # backward compatibility: old shared prompt storage
+    return get_style_prompt(user_id, cfg)
+
 def sanitize_llm_post(text: str, link: str) -> str:
     t = (text or "").replace("\r", "").strip()
 
@@ -530,7 +539,7 @@ def extract_summary_for_link(feed_url: str, link_normalized: str, limit: int = 2
 
 # ===================== LLM providers =====================
 def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str) -> str:
-    style_prompt = get_style_prompt(user_id, cfg)
+    style_prompt = get_mode_prompt(user_id, cfg, "rss")
     title = clean_text(title)
     summary = clean_text(summary)
 
@@ -554,7 +563,7 @@ def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: st
     if not OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY missing (set it in host variables)")
 
-    style_prompt = get_style_prompt(user_id, cfg)
+    style_prompt = get_mode_prompt(user_id, cfg, "rss")
     title = clean_text(title)
     summary = clean_text(summary)
 
@@ -590,7 +599,7 @@ def llm_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: s
 
 # ===================== Creator mode (text-only) =====================
 def creator_make_post(user_id: int, cfg: dict) -> str:
-    style_prompt = get_style_prompt(user_id, cfg)
+    style_prompt = get_mode_prompt(user_id, cfg, "creative")
     profile = (cfg.get("creator_profile") or "").strip()
 
     if not profile:
@@ -880,8 +889,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:creative:editprompt":
         if not await enforce_mode_paywall(update, cfg, "creator"):
             return
-        current = get_style_prompt(user_id, cfg).strip()
-        current_text = ui_text(cfg, "prompt_current").format(prompt=current[:1500]) if current else ui_text(cfg, "prompt_empty")
+        current = get_mode_prompt(user_id, cfg, "creative").strip()
+        current_text = ui_text(cfg, "prompt_current_creative").format(prompt=current[:1500]) if current else ui_text(cfg, "prompt_empty")
         context.user_data["awaiting_prompt_mode"] = "creative"
         await q.answer()
         await q.message.reply_text(current_text + "\n\n" + ui_text(cfg, "prompt_edit_instructions"))
@@ -890,8 +899,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:rss:editprompt":
         if not await enforce_mode_paywall(update, cfg, "rss"):
             return
-        current = get_style_prompt(user_id, cfg).strip()
-        current_text = ui_text(cfg, "prompt_current").format(prompt=current[:1500]) if current else ui_text(cfg, "prompt_empty")
+        current = get_mode_prompt(user_id, cfg, "rss").strip()
+        current_text = ui_text(cfg, "prompt_current_rss").format(prompt=current[:1500]) if current else ui_text(cfg, "prompt_empty")
         context.user_data["awaiting_prompt_mode"] = "rss"
         await q.answer()
         await q.message.reply_text(current_text + "\n\n" + ui_text(cfg, "prompt_edit_instructions"))
@@ -1173,7 +1182,8 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         if text.lower() == "cancel":
             await send_menu(update, cfg, ui_text(cfg, "prompt_edit_cancelled"))
             return
-        custom_style_path(user_id).write_text(text, encoding="utf-8")
+        prompt_key = "creative_prompt" if awaiting_prompt_mode == "creative" else "rss_prompt"
+        cfg[prompt_key] = text
         save_client(user_id, cfg)
         await send_menu(update, cfg, ui_text(cfg, "prompt_edit_saved"))
         return
