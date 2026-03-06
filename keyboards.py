@@ -48,6 +48,14 @@ def build_channel_management_menu(labels: dict) -> InlineKeyboardMarkup:
     )
 
 
+def build_channel_delete_menu(labels: dict, channels: list[str]) -> InlineKeyboardMarkup:
+    rows = []
+    for idx, channel in enumerate(channels, start=1):
+        rows.append([InlineKeyboardButton(f"🗑 {idx}. {channel}", callback_data=f"ui:delchannel:{idx}")])
+    rows.append([InlineKeyboardButton(labels["btn_back"], callback_data="ui:setup:channels")])
+    return InlineKeyboardMarkup(rows)
+
+
 def build_modes_menu(labels: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
