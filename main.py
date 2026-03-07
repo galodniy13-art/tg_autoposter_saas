@@ -480,26 +480,35 @@ def get_mode_prompt(user_id: int, cfg: dict, mode: str) -> str:
     prompt = (cfg.get(key) or "").strip()
     if prompt:
         return prompt
-    # backward compatibility: old shared prompt storage
-    return get_style_prompt(user_id, cfg)
+
+    # backward compatibility: older shared prompt fields
+    for legacy_key in ("prompt", "style_prompt"):
+        legacy_prompt = (cfg.get(legacy_key) or "").strip()
+        if legacy_prompt:
+            return legacy_prompt
+
+    cpath = custom_style_path(user_id)
+    if cpath.exists():
+        txt = cpath.read_text(encoding="utf-8", errors="ignore").strip()
+        if txt:
+            return txt
+
+    if mode == "creative":
+        return "Write a Telegram-ready post in plain text. No JSON, no code blocks."
+    return "Rewrite the source into a Telegram-ready post in plain text. No JSON, no code blocks."
 
 def sanitize_llm_post(text: str, link: str) -> str:
     t = (text or "").replace("\r", "").strip()
 
-    # remove any URLs model included (we add exactly one at end)
-    t = re.sub(r"https?://\S+", "", t).strip()
-    # remove numbering prefixes
-    t = re.sub(r"(?m)^\s*\d+\s*[\)\.\-:]\s*", "", t).strip()
-    # remove link label leftovers
-    t = re.sub(r"(?im)^\s*(ссылка|link)\s*:\s*.*$", "", t)
-    t = re.sub(r"(?im)^\s*\[\s*link\s*\]\s*$", "", t)
-    # collapse blank lines
+    # trim common wrapper formatting
+    t = re.sub(r"(?is)^```[a-z0-9_\-]*\s*", "", t).strip()
+    t = re.sub(r"(?is)\s*```$", "", t).strip()
     t = re.sub(r"\n{3,}", "\n\n", t).strip()
 
     if not t:
         t = "📌 Коротко: в источнике мало деталей."
 
-    return (t.rstrip() + "\n\n" + f"🔗 {link}")[:900]
+    return t[:900]
 
 # ===================== RSS helpers =====================
 def pick_newest_unseen(cfg: dict):
@@ -547,8 +556,7 @@ def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link
 
     prompt = (
         style_prompt + "\n\n"
-        "Rewrite this into a natural short Telegram post in the same style and language. "
-        "Do not invent facts beyond the summary. Include the source URL once at the end.\n\n"
+        "Use only facts from the source content below. Return plain Telegram-ready text (no JSON, no code blocks).\n\n"
         f"Title: {title}\n"
         f"Summary: {summary}\n"
         f"Source URL: {link}\n"
@@ -573,8 +581,7 @@ def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: st
         f"Title: {title}\n"
         f"Summary: {summary}\n"
         f"Source URL: {link}\n\n"
-        "Rewrite this as a natural short Telegram post in the system style. "
-        "Do not invent facts beyond the summary. Include the source URL once at the end."
+        "Use only facts from the source content. Return plain Telegram-ready text (no JSON, no code blocks)."
     )
 
     url = OPENAI_BASE_URL.rstrip("/") + "/chat/completions"
@@ -609,8 +616,7 @@ def creator_make_post(user_id: int, cfg: dict) -> str:
         profile = "Эксперт/блогер. Пишет полезные короткие посты для своей аудитории."
 
     prompt = (
-        "Write one original Telegram post in the system style and in the user's language. "
-        "Natural tone, no external news, no links.\n\n"
+        "Write one Telegram-ready post following the system prompt. Return plain text only (no JSON, no code blocks).\n\n"
         f"Creator profile:\n{profile}\n"
     )
 
@@ -632,7 +638,7 @@ def creator_make_post(user_id: int, cfg: dict) -> str:
         return clean_text(txt)[:900]
 
     # ollama creator
-    payload = {"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}
+    payload = {"model": OLLAMA_MODEL, "prompt": style_prompt + "\n\n" + prompt, "stream": False}
     r = requests.post(OLLAMA_URL, json=payload, timeout=60)
     r.raise_for_status()
     data = r.json()
