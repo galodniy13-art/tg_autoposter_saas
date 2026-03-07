@@ -27,6 +27,8 @@ from keyboards import (
     build_feed_management_menu,
     build_feed_delete_menu,
     build_channel_delete_menu,
+    build_scheduling_menu,
+    build_mode_schedule_menu,
 )
 
 from texts import TEXTS as UI_TEXTS
@@ -350,6 +352,14 @@ DEFAULT_CLIENT = {
     "schedule_times": [],
     "last_schedule_date": None,
     "last_schedule_time": None,
+    "rss_schedule_enabled": False,
+    "rss_schedule_times": [],
+    "rss_last_schedule_date": None,
+    "rss_last_schedule_time": None,
+    "creative_schedule_enabled": False,
+    "creative_schedule_times": [],
+    "creative_last_schedule_date": None,
+    "creative_last_schedule_time": None,
 
     "daily_limit": 10,
     "daily_count": 0,
@@ -688,6 +698,83 @@ def build_lang_menu() -> InlineKeyboardMarkup:
     return build_lang_keyboard()
 
 
+def build_scheduling_submenu(cfg: dict) -> InlineKeyboardMarkup:
+    return build_scheduling_menu(ui_pack(cfg))
+
+
+def mode_schedule_state(cfg: dict, mode: str) -> tuple[bool, list[str], str, str]:
+    if mode == "creative":
+        enabled = bool(cfg.get("creative_schedule_enabled"))
+        times = cfg.get("creative_schedule_times", []) or []
+        last_date = cfg.get("creative_last_schedule_date")
+        last_time = cfg.get("creative_last_schedule_time")
+    else:
+        enabled = bool(cfg.get("rss_schedule_enabled"))
+        times = cfg.get("rss_schedule_times", []) or []
+        last_date = cfg.get("rss_last_schedule_date")
+        last_time = cfg.get("rss_last_schedule_time")
+
+    if not times and cfg.get("schedule_times"):
+        enabled = bool(cfg.get("schedule_enabled"))
+        times = cfg.get("schedule_times", []) or []
+        last_date = cfg.get("last_schedule_date")
+        last_time = cfg.get("last_schedule_time")
+    return enabled, times, last_date, last_time
+
+
+def schedule_summary_for_mode(cfg: dict, mode: str) -> str:
+    enabled, times, _, _ = mode_schedule_state(cfg, mode)
+    status = "ON" if enabled else "OFF"
+    times_text = ", ".join(times) if times else "(empty)"
+    return f"Status: {status}\nTimes: {times_text}"
+
+
+def should_run_mode_now(cfg: dict, mode: str, now: datetime, last_post_at: dict[int, datetime], user_id: int) -> bool:
+    enabled, times, last_date, last_time = mode_schedule_state(cfg, mode)
+    use_schedule = bool(enabled and times)
+    if use_schedule:
+        now_slot = now.strftime("%H:%M")
+        if now_slot not in set(times):
+            return False
+        today = str(date.today())
+        if last_date == today and last_time == now_slot:
+            return False
+        return True
+
+    interval_min = int(cfg.get("interval_minutes", 30))
+    prev = last_post_at.get(user_id)
+    if prev and (now - prev).total_seconds() < interval_min * 60:
+        return False
+    return True
+
+
+def mark_mode_scheduled(cfg: dict, mode: str, now: datetime) -> None:
+    enabled, times, _, _ = mode_schedule_state(cfg, mode)
+    if not (enabled and times):
+        return
+    if mode == "creative":
+        cfg["creative_last_schedule_date"] = str(date.today())
+        cfg["creative_last_schedule_time"] = now.strftime("%H:%M")
+    else:
+        cfg["rss_last_schedule_date"] = str(date.today())
+        cfg["rss_last_schedule_time"] = now.strftime("%H:%M")
+
+
+def build_mode_schedule_submenu(cfg: dict, mode: str) -> InlineKeyboardMarkup:
+    enabled, _, _, _ = mode_schedule_state(cfg, mode)
+    return build_mode_schedule_menu(ui_pack(cfg), mode, enabled)
+
+
+def schedule_mode_title_key(mode: str) -> str:
+    return "schedule_mode_title_creative" if mode == "creative" else "schedule_mode_title_rss"
+
+
+def schedule_mode_menu_text(cfg: dict, mode: str) -> str:
+    return ui_text(cfg, schedule_mode_title_key(mode)) + "\n\n" + ui_text(cfg, "schedule_current").format(
+        schedule=schedule_summary_for_mode(cfg, mode)
+    )
+
+
 async def reply_ui(update: Update, text: str, cfg: dict, show_menu: bool = True) -> None:
     markup = build_main_menu_clean(cfg) if show_menu else None
 
@@ -737,6 +824,28 @@ def schedule_summary(cfg: dict) -> str:
     times = cfg.get("schedule_times", [])
     times_text = ", ".join(times) if times else "(empty)"
     return f"Status: {enabled}\nTimes: {times_text}"
+
+
+def parse_schedule_input(text: str) -> list[str] | None:
+    chunks = [x.strip() for x in text.split(",") if x.strip()]
+    if not chunks:
+        return None
+    if any(not validate_hhmm(x) for x in chunks):
+        return None
+    return sorted(set(chunks))
+
+
+def rss_preview_text(user_id: int, cfg: dict) -> str:
+    feeds = cfg.get("feeds", [])
+    if not feeds:
+        return ui_text(cfg, "preview_no_feeds")
+    best = pick_newest_unseen(cfg)
+    if not best:
+        return "No new items found (or everything already posted)."
+    _, title, link, src = best
+    summary = extract_summary_for_link(src, link)
+    msg = llm_generate_post(user_id, cfg, title, summary, link)
+    return "🧪 Preview:\n\n" + msg
 
 
 def feeds_overview(cfg: dict) -> str:
@@ -874,6 +983,14 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.message.reply_text(text=text, reply_markup=build_channel_menu(cfg))
         return
 
+    if data == "ui:setup:scheduling":
+        await q.answer()
+        try:
+            await q.edit_message_text(text=ui_text(cfg, "scheduling_menu_title"), reply_markup=build_scheduling_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=ui_text(cfg, "scheduling_menu_title"), reply_markup=build_scheduling_submenu(cfg))
+        return
+
     if data == "ui:modes":
         await q.answer()
         try:
@@ -892,6 +1009,14 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.message.reply_text(text=ui_text(cfg, "creative_menu_title"), reply_markup=build_creative_submenu(cfg))
         return
 
+    if data == "ui:creative:preview":
+        if not await enforce_mode_paywall(update, cfg, "creator"):
+            return
+        await q.answer()
+        msg = creator_make_post(user_id, cfg)
+        await q.message.reply_text("🧪 Preview:\n\n" + msg, reply_markup=build_creative_submenu(cfg))
+        return
+
     if data == "ui:mode:rss:menu":
         if not await enforce_mode_paywall(update, cfg, "rss"):
             return
@@ -900,6 +1025,54 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.edit_message_text(text=ui_text(cfg, "rss_menu_title"), reply_markup=build_rss_submenu(cfg))
         except BadRequest:
             await q.message.reply_text(text=ui_text(cfg, "rss_menu_title"), reply_markup=build_rss_submenu(cfg))
+        return
+
+    if data == "ui:rss:preview":
+        if not await enforce_mode_paywall(update, cfg, "rss"):
+            return
+        await q.answer()
+        preview = rss_preview_text(user_id, cfg)
+        await q.message.reply_text(preview, reply_markup=build_rss_submenu(cfg))
+        return
+
+    if data in ("ui:schedule:rss:menu", "ui:schedule:creative:menu"):
+        mode = "creative" if data.endswith("creative:menu") else "rss"
+        await q.answer()
+        text = schedule_mode_menu_text(cfg, mode)
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_mode_schedule_submenu(cfg, mode))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_mode_schedule_submenu(cfg, mode))
+        return
+
+    if data in ("ui:schedule:rss:edit", "ui:schedule:creative:edit"):
+        mode = "creative" if data.endswith("creative:edit") else "rss"
+        context.user_data["awaiting_schedule_mode"] = mode
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "schedule_input_instructions") + "\n\n" + ui_text(cfg, "schedule_current").format(
+                schedule=schedule_summary_for_mode(cfg, mode)
+            ),
+            reply_markup=build_mode_schedule_submenu(cfg, mode),
+        )
+        return
+
+    if data in ("ui:schedule:rss:toggle", "ui:schedule:creative:toggle"):
+        mode = "creative" if data.endswith("creative:toggle") else "rss"
+        enabled, _, _, _ = mode_schedule_state(cfg, mode)
+        if mode == "creative":
+            cfg["creative_schedule_enabled"] = not enabled
+            notice = ui_text(cfg, "schedule_enabled") if not enabled else ui_text(cfg, "schedule_disabled")
+        else:
+            cfg["rss_schedule_enabled"] = not enabled
+            notice = ui_text(cfg, "schedule_enabled") if not enabled else ui_text(cfg, "schedule_disabled")
+        save_client(user_id, cfg)
+        await q.answer()
+        text = notice + "\n\n" + schedule_mode_menu_text(cfg, mode)
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_mode_schedule_submenu(cfg, mode))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_mode_schedule_submenu(cfg, mode))
         return
 
     if data == "ui:rss:feeds":
@@ -1299,6 +1472,50 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await send_prompt_parent_menu(update, cfg, awaiting_prompt_mode, ui_text(cfg, "prompt_edit_saved"))
         return
 
+    awaiting_schedule_mode = context.user_data.get("awaiting_schedule_mode")
+    if awaiting_schedule_mode:
+        if text.lower() == "cancel":
+            context.user_data.pop("awaiting_schedule_mode", None)
+            await update.message.reply_text(
+                schedule_mode_menu_text(cfg, awaiting_schedule_mode),
+                reply_markup=build_mode_schedule_submenu(cfg, awaiting_schedule_mode),
+            )
+            return
+
+        if text.lower() == "clear":
+            if awaiting_schedule_mode == "creative":
+                cfg["creative_schedule_times"] = []
+                cfg["creative_last_schedule_date"] = None
+                cfg["creative_last_schedule_time"] = None
+            else:
+                cfg["rss_schedule_times"] = []
+                cfg["rss_last_schedule_date"] = None
+                cfg["rss_last_schedule_time"] = None
+            save_client(user_id, cfg)
+            context.user_data.pop("awaiting_schedule_mode", None)
+            await update.message.reply_text(
+                ui_text(cfg, "schedule_cleared") + "\n\n" + schedule_mode_menu_text(cfg, awaiting_schedule_mode),
+                reply_markup=build_mode_schedule_submenu(cfg, awaiting_schedule_mode),
+            )
+            return
+
+        parsed = parse_schedule_input(text)
+        if not parsed:
+            await update.message.reply_text(ui_text(cfg, "schedule_invalid"))
+            return
+
+        if awaiting_schedule_mode == "creative":
+            cfg["creative_schedule_times"] = parsed
+        else:
+            cfg["rss_schedule_times"] = parsed
+        save_client(user_id, cfg)
+        context.user_data.pop("awaiting_schedule_mode", None)
+        await update.message.reply_text(
+            ui_text(cfg, "schedule_saved") + "\n\n" + schedule_mode_menu_text(cfg, awaiting_schedule_mode),
+            reply_markup=build_mode_schedule_submenu(cfg, awaiting_schedule_mode),
+        )
+        return
+
     if context.user_data.get("awaiting_feed_add"):
         context.user_data.pop("awaiting_feed_add", None)
         url = text
@@ -1488,11 +1705,7 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await reply_ui(update, "🧪 Preview:\n\n" + msg, cfg, show_menu=True)
         return
 
-    channel = cfg.get("channel")
     feeds = cfg.get("feeds", [])
-    if not channel:
-        await reply_ui(update, "Channel not set. Use /setchannel @channelusername", cfg, show_menu=True)
-        return
 
     if mode == "both":
         creator_msg = creator_make_post(user_id, cfg)
@@ -1510,7 +1723,7 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if not feeds:
-        await reply_ui(update, "No feeds. Add one: /addfeed <url>", cfg, show_menu=True)
+        await reply_ui(update, ui_text(cfg, "preview_no_feeds"), cfg, show_menu=True)
         return
 
     best = pick_newest_unseen(cfg)
@@ -1518,10 +1731,7 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await reply_ui(update, "No new items found (or everything already posted).", cfg, show_menu=True)
         return
 
-    _, title, link, src = best
-    summary = extract_summary_for_link(src, link)
-    msg = llm_generate_post(user_id, cfg, title, summary, link)
-    await reply_ui(update, "🧪 Preview:\n\n" + msg, cfg, show_menu=True)
+    await reply_ui(update, rss_preview_text(user_id, cfg), cfg, show_menu=True)
 
 async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -1903,29 +2113,15 @@ async def autopost_loop(app: Application) -> None:
                 if not channel:
                     continue
 
-                interval_min = int(cfg.get("interval_minutes", 30))
-                use_schedule = bool(cfg.get("schedule_enabled") and cfg.get("schedule_times"))
-                if use_schedule:
-                    now_slot = now.strftime("%H:%M")
-                    if now_slot not in set(cfg.get("schedule_times", [])):
-                        continue
-                    today = str(date.today())
-                    if cfg.get("last_schedule_date") == today and cfg.get("last_schedule_time") == now_slot:
-                        continue
-                else:
-                    prev = last_post_at.get(user_id)
-                    if prev and (now - prev).total_seconds() < interval_min * 60:
-                        continue
-
                 feeds = cfg.get("feeds", [])
 
                 if mode == "creator":
+                    if not should_run_mode_now(cfg, "creative", now, last_post_at, user_id):
+                        continue
                     msg = creator_make_post(user_id, cfg)
                     await app.bot.send_message(chat_id=channel, text=msg)
                     bump_daily_count(cfg)
-                    if use_schedule:
-                        cfg["last_schedule_date"] = str(date.today())
-                        cfg["last_schedule_time"] = now.strftime("%H:%M")
+                    mark_mode_scheduled(cfg, "creative", now)
                     save_client(user_id, cfg)
                     last_post_at[user_id] = now
                     continue
@@ -1933,17 +2129,20 @@ async def autopost_loop(app: Application) -> None:
                 best = pick_newest_unseen(cfg) if feeds else None
 
                 if mode == "both" and not best:
+                    if not should_run_mode_now(cfg, "creative", now, last_post_at, user_id):
+                        continue
                     msg = creator_make_post(user_id, cfg)
                     await app.bot.send_message(chat_id=channel, text=msg)
                     bump_daily_count(cfg)
-                    if use_schedule:
-                        cfg["last_schedule_date"] = str(date.today())
-                        cfg["last_schedule_time"] = now.strftime("%H:%M")
+                    mark_mode_scheduled(cfg, "creative", now)
                     save_client(user_id, cfg)
                     last_post_at[user_id] = now
                     continue
 
                 if not best:
+                    continue
+
+                if not should_run_mode_now(cfg, "rss", now, last_post_at, user_id):
                     continue
 
                 _, title, link, src = best
@@ -1956,9 +2155,7 @@ async def autopost_loop(app: Application) -> None:
                 cfg["posted_urls"].append(link)
                 cfg["posted_urls"] = cfg["posted_urls"][-int(cfg.get("max_dedupe", 1500)):]
                 bump_daily_count(cfg)
-                if use_schedule:
-                    cfg["last_schedule_date"] = str(date.today())
-                    cfg["last_schedule_time"] = now.strftime("%H:%M")
+                mark_mode_scheduled(cfg, "rss", now)
                 save_client(user_id, cfg)
                 last_post_at[user_id] = now
 
