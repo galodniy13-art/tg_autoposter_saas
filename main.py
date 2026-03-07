@@ -702,6 +702,23 @@ async def send_menu(update: Update, cfg: dict, text: str) -> None:
     await reply_ui(update, text, cfg, show_menu=True)
 
 
+
+async def send_prompt_parent_menu(update: Update, cfg: dict, mode: str, notice: str) -> None:
+    if not update.message:
+        return
+    if mode == "creative":
+        await update.message.reply_text(
+            text=notice + "\n\n" + ui_text(cfg, "creative_menu_title"),
+            reply_markup=build_creative_submenu(cfg),
+        )
+        return
+
+    await update.message.reply_text(
+        text=notice + "\n\n" + ui_text(cfg, "rss_menu_title"),
+        reply_markup=build_rss_submenu(cfg),
+    )
+
+
 def validate_hhmm(value: str) -> bool:
     if not re.fullmatch(r"\d{2}:\d{2}", value or ""):
         return False
@@ -911,7 +928,15 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         current_text = ui_text(cfg, "prompt_current_creative").format(prompt=current[:1500]) if current else ui_text(cfg, "prompt_empty")
         context.user_data["awaiting_prompt_mode"] = "creative"
         await q.answer()
-        await q.message.reply_text(current_text + "\n\n" + ui_text(cfg, "prompt_edit_instructions"))
+        await q.message.reply_text(
+            current_text
+            + "\n\n"
+            + ui_text(cfg, "prompt_guidance_creative")
+            + "\n\n"
+            + ui_text(cfg, "prompt_edit_instructions")
+            + "\n"
+            + ui_text(cfg, "prompt_edit_cancel_hint")
+        )
         return
 
     if data == "ui:rss:editprompt":
@@ -921,7 +946,15 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         current_text = ui_text(cfg, "prompt_current_rss").format(prompt=current[:1500]) if current else ui_text(cfg, "prompt_empty")
         context.user_data["awaiting_prompt_mode"] = "rss"
         await q.answer()
-        await q.message.reply_text(current_text + "\n\n" + ui_text(cfg, "prompt_edit_instructions"))
+        await q.message.reply_text(
+            current_text
+            + "\n\n"
+            + ui_text(cfg, "prompt_guidance_rss")
+            + "\n\n"
+            + ui_text(cfg, "prompt_edit_instructions")
+            + "\n"
+            + ui_text(cfg, "prompt_edit_cancel_hint")
+        )
         return
 
     if data == "ui:setchannel":
@@ -1252,12 +1285,12 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if awaiting_prompt_mode:
         context.user_data.pop("awaiting_prompt_mode", None)
         if text.lower() == "cancel":
-            await send_menu(update, cfg, ui_text(cfg, "prompt_edit_cancelled"))
+            await send_prompt_parent_menu(update, cfg, awaiting_prompt_mode, ui_text(cfg, "prompt_edit_cancelled"))
             return
         prompt_key = "creative_prompt" if awaiting_prompt_mode == "creative" else "rss_prompt"
         cfg[prompt_key] = text
         save_client(user_id, cfg)
-        await send_menu(update, cfg, ui_text(cfg, "prompt_edit_saved"))
+        await send_prompt_parent_menu(update, cfg, awaiting_prompt_mode, ui_text(cfg, "prompt_edit_saved"))
         return
 
     if context.user_data.get("awaiting_feed_add"):
