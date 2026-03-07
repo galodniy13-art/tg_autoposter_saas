@@ -829,10 +829,20 @@ def schedule_summary_for_mode(cfg: dict, mode: str) -> str:
     return f"Status: {status}\nTimes: {times_text}"
 
 
+def mode_uses_interval(cfg: dict, mode: str) -> bool:
+    key = f"{mode}_use_interval"
+    if key in cfg:
+        return bool(cfg.get(key))
+    enabled, times, _, _ = mode_schedule_state(cfg, mode)
+    return not bool(enabled and times)
+
+
 def should_run_mode_now(cfg: dict, mode: str, now: datetime, last_post_at: dict[int, datetime], user_id: int) -> bool:
     enabled, times, last_date, last_time = mode_schedule_state(cfg, mode)
-    use_schedule = bool(enabled and times)
+    use_schedule = not mode_uses_interval(cfg, mode)
     if use_schedule:
+        if not enabled or not times:
+            return False
         now_slot = now.strftime("%H:%M")
         if now_slot not in set(times):
             return False
@@ -862,7 +872,7 @@ def mark_mode_scheduled(cfg: dict, mode: str, now: datetime) -> None:
 
 def build_mode_schedule_submenu(cfg: dict, mode: str) -> InlineKeyboardMarkup:
     enabled, _, _, _ = mode_schedule_state(cfg, mode)
-    return build_mode_schedule_menu(ui_pack(cfg), mode, enabled)
+    return build_mode_schedule_menu(ui_pack(cfg), mode, enabled, mode_uses_interval(cfg, mode))
 
 
 def schedule_mode_title_key(mode: str) -> str:
@@ -870,8 +880,16 @@ def schedule_mode_title_key(mode: str) -> str:
 
 
 def schedule_mode_menu_text(cfg: dict, mode: str) -> str:
-    return ui_text(cfg, schedule_mode_title_key(mode)) + "\n\n" + ui_text(cfg, "schedule_current").format(
-        schedule=schedule_summary_for_mode(cfg, mode)
+    posting_mode = ui_text(cfg, "posting_mode_interval") if mode_uses_interval(cfg, mode) else ui_text(cfg, "posting_mode_scheduled")
+    interval_min = int(cfg.get("interval_minutes", 30))
+    return (
+        ui_text(cfg, schedule_mode_title_key(mode))
+        + "\n\n"
+        + ui_text(cfg, "schedule_posting_mode").format(mode=posting_mode)
+        + "\n"
+        + ui_text(cfg, "schedule_interval_current").format(interval=interval_min)
+        + "\n\n"
+        + ui_text(cfg, "schedule_current").format(schedule=schedule_summary_for_mode(cfg, mode))
     )
 
 
@@ -1032,20 +1050,18 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = ensure_daily_counter(load_client(user_id))
-    sub = cfg.get("subscription_until") or "inactive"
+    sub = cfg.get("subscription_until") or ui_text(cfg, "status_inactive")
+    channels = get_saved_channels(cfg)
+    channels_text = "\n".join([f"• {ch}" for ch in channels]) if channels else ui_text(cfg, "status_not_set")
+    rss_daily = int(cfg.get("rss_daily_limit", 0) or 0)
+    creative_daily = int(cfg.get("creative_daily_limit", 0) or 0)
 
     text = (
-        f"👤 Your ID: {user_id}\n"
-        f"🌍 Lang: {cfg.get('language')}\n"
-        f"🧩 Mode: {cfg.get('mode')}\n"
-        f"📌 Channel: {cfg.get('channel') or 'not set'}\n"
-        f"🧾 Feeds: {len(cfg.get('feeds', []))}\n"
-        f"🤖 Autopost: {'ON' if cfg.get('autopost_enabled') else 'OFF'}\n"
-        f"🕒 Schedule: {'ON' if cfg.get('schedule_enabled') else 'OFF'} ({', '.join(cfg.get('schedule_times', [])) or 'empty'})\n"
-        f"⏱ Interval: {cfg.get('interval_minutes')} min\n"
-        f"📅 Daily: {cfg.get('daily_count')}/{cfg.get('daily_limit')} (date {cfg.get('daily_date')})\n"
-        f"💳 Subscription until: {sub}\n"
-        f"🧠 LLM_PROVIDER: {LLM_PROVIDER}"
+        f"{ui_text(cfg, 'status_id')}: {user_id}\n"
+        f"{ui_text(cfg, 'status_channels')}:\n{channels_text}\n"
+        f"{ui_text(cfg, 'status_rss_daily')}: {rss_daily}\n"
+        f"{ui_text(cfg, 'status_creative_daily')}: {creative_daily}\n"
+        f"{ui_text(cfg, 'status_valid_until')}: {sub}"
     )
     await reply_ui(update, text, cfg, show_menu=True)
 
@@ -1137,6 +1153,12 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             q.data = mapped
         elif action in ("schedule_rss_toggle", "schedule_creative_toggle"):
             mapped = "ui:schedule:rss:toggle" if action == "schedule_rss_toggle" else "ui:schedule:creative:toggle"
+            q.data = mapped
+        elif action in ("schedule_rss_switch", "schedule_creative_switch"):
+            mapped = "ui:schedule:rss:switch_mode" if action == "schedule_rss_switch" else "ui:schedule:creative:switch_mode"
+            q.data = mapped
+        elif action in ("schedule_rss_interval", "schedule_creative_interval"):
+            mapped = "ui:schedule:rss:interval" if action == "schedule_rss_interval" else "ui:schedule:creative:interval"
             q.data = mapped
         else:
             await q.message.reply_text(ui_text(cfg, "channel_selected_now").format(channel=selected))
@@ -1324,6 +1346,58 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.edit_message_text(text=text, reply_markup=build_mode_schedule_submenu(cfg, mode))
         except BadRequest:
             await q.message.reply_text(text=text, reply_markup=build_mode_schedule_submenu(cfg, mode))
+        return
+
+    if data in ("ui:schedule:rss:switch_mode", "ui:schedule:creative:switch_mode"):
+        mode = "creative" if data.endswith("creative:switch_mode") else "rss"
+        action = "schedule_creative_switch" if mode == "creative" else "schedule_rss_switch"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, action, f"ui:schedule:{mode}:menu"),
+            )
+            return
+        key = f"{mode}_use_interval"
+        cfg[key] = not mode_uses_interval(cfg, mode)
+        save_client(user_id, cfg)
+        notice = ui_text(cfg, "posting_mode_interval_set") if cfg[key] else ui_text(cfg, "posting_mode_scheduled_set")
+        await q.answer()
+        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + notice + "\n\n" + schedule_mode_menu_text(cfg, mode)
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_mode_schedule_submenu(cfg, mode))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_mode_schedule_submenu(cfg, mode))
+        return
+
+    if data in ("ui:schedule:rss:interval", "ui:schedule:creative:interval"):
+        mode = "creative" if data.endswith("creative:interval") else "rss"
+        action = "schedule_creative_interval" if mode == "creative" else "schedule_rss_interval"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, action, f"ui:schedule:{mode}:menu"),
+            )
+            return
+        context.user_data["awaiting_interval_mode"] = mode
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            + "\n\n"
+            + ui_text(cfg, "interval_input_instructions"),
+            reply_markup=build_mode_schedule_submenu(cfg, mode),
+        )
         return
 
     if data == "ui:rss:output":
@@ -1862,6 +1936,32 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(
             ui_text(cfg, "schedule_saved") + "\n\n" + schedule_mode_menu_text(cfg, awaiting_schedule_mode),
             reply_markup=build_mode_schedule_submenu(cfg, awaiting_schedule_mode),
+        )
+        return
+
+    awaiting_interval_mode = context.user_data.get("awaiting_interval_mode")
+    if awaiting_interval_mode:
+        if text.lower() == "cancel":
+            context.user_data.pop("awaiting_interval_mode", None)
+            await update.message.reply_text(
+                schedule_mode_menu_text(cfg, awaiting_interval_mode),
+                reply_markup=build_mode_schedule_submenu(cfg, awaiting_interval_mode),
+            )
+            return
+        if not text.isdigit():
+            await update.message.reply_text(ui_text(cfg, "interval_invalid"))
+            return
+        minutes = int(text)
+        if minutes < 1:
+            await update.message.reply_text(ui_text(cfg, "interval_invalid"))
+            return
+        cfg["interval_minutes"] = minutes
+        cfg[f"{awaiting_interval_mode}_use_interval"] = True
+        save_client(user_id, cfg)
+        context.user_data.pop("awaiting_interval_mode", None)
+        await update.message.reply_text(
+            ui_text(cfg, "interval_saved").format(interval=minutes) + "\n\n" + schedule_mode_menu_text(cfg, awaiting_interval_mode),
+            reply_markup=build_mode_schedule_submenu(cfg, awaiting_interval_mode),
         )
         return
 
