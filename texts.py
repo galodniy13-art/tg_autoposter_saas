@@ -137,6 +137,9 @@ TEXTS = {
         "channel_choose_delete": "Choose a channel to delete:",
         "channel_deleted_named": "✅ Channel removed: {channel}",
         "channel_slots_limit": "Channel limit reached ({count}/{slots}). Buy/add channel capacity to connect more channels.",
+        "channel_picker_title": "Select channel to continue:",
+        "channel_picker_empty": "No channels found yet. Add a channel first in Channel Management.",
+        "channel_selected_now": "📌 Selected channel: {channel}",
         "start_welcome": (
             "👋 Welcome to AI autoposting for influencers.\n\n"
             "This bot helps you publish on Telegram using AI in two modes:\n"
@@ -286,6 +289,9 @@ TEXTS = {
         "channel_choose_delete": "Выберите канал для удаления:",
         "channel_deleted_named": "✅ Канал удалён: {channel}",
         "channel_slots_limit": "Достигнут лимит каналов ({count}/{slots}). Увеличьте доступ, чтобы добавить ещё канал.",
+        "channel_picker_title": "Выберите канал, чтобы продолжить:",
+        "channel_picker_empty": "Каналы не найдены. Сначала добавьте канал в управлении каналами.",
+        "channel_selected_now": "📌 Выбран канал: {channel}",
         "start_welcome": (
             "👋 Добро пожаловать в AI-автопостинг для инфлюенсеров.\n\n"
             "Бот помогает публиковать в Telegram с помощью ИИ в двух режимах:\n"
