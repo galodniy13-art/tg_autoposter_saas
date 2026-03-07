@@ -119,11 +119,14 @@ def build_scheduling_menu(labels: dict) -> InlineKeyboardMarkup:
     )
 
 
-def build_mode_schedule_menu(labels: dict, mode: str, enabled: bool) -> InlineKeyboardMarkup:
+def build_mode_schedule_menu(labels: dict, mode: str, enabled: bool, use_interval: bool) -> InlineKeyboardMarkup:
     toggle_label = labels["btn_schedule_toggle_off"] if enabled else labels["btn_schedule_toggle_on"]
+    mode_label = labels["btn_posting_mode_interval"] if use_interval else labels["btn_posting_mode_scheduled"]
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton(mode_label, callback_data=f"ui:schedule:{mode}:switch_mode")],
             [InlineKeyboardButton(labels["btn_schedule_edit"], callback_data=f"ui:schedule:{mode}:edit")],
+            [InlineKeyboardButton(labels["btn_schedule_edit_interval"], callback_data=f"ui:schedule:{mode}:interval")],
             [InlineKeyboardButton(toggle_label, callback_data=f"ui:schedule:{mode}:toggle")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:setup:scheduling")],
         ]
