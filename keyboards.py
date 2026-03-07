@@ -57,6 +57,14 @@ def build_channel_delete_menu(labels: dict, channels: list[str]) -> InlineKeyboa
     return InlineKeyboardMarkup(rows)
 
 
+def build_channel_picker_menu(labels: dict, channels: list[str], action: str, back_callback: str) -> InlineKeyboardMarkup:
+    rows = []
+    for idx, channel in enumerate(channels, start=1):
+        rows.append([InlineKeyboardButton(f"{idx}. {channel}", callback_data=f"ui:pickchannel:{action}:{idx}")])
+    rows.append([InlineKeyboardButton(labels["btn_back"], callback_data=back_callback)])
+    return InlineKeyboardMarkup(rows)
+
+
 def build_modes_menu(labels: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [

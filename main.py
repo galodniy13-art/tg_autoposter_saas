@@ -27,6 +27,7 @@ from keyboards import (
     build_feed_management_menu,
     build_feed_delete_menu,
     build_channel_delete_menu,
+    build_channel_picker_menu,
     build_scheduling_menu,
     build_mode_schedule_menu,
 )
@@ -874,6 +875,30 @@ def build_channel_delete_selection_menu(cfg: dict) -> InlineKeyboardMarkup:
     return build_channel_delete_menu(ui_pack(cfg), channels)
 
 
+def get_saved_channels(cfg: dict) -> list[str]:
+    return [cfg.get("channel")] if cfg.get("channel") else []
+
+
+def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, action: str) -> tuple[str | None, str | None]:
+    channels = get_saved_channels(cfg)
+    if not channels:
+        context.user_data.pop("active_channel_idx", None)
+        return None, "empty"
+    if len(channels) == 1:
+        context.user_data["active_channel_idx"] = 0
+        return channels[0], None
+
+    idx = context.user_data.get("active_channel_idx")
+    if isinstance(idx, int) and 0 <= idx < len(channels):
+        return channels[idx], None
+
+    return None, "pick"
+
+
+def build_channel_picker(cfg: dict, action: str, back_callback: str) -> InlineKeyboardMarkup:
+    return build_channel_picker_menu(ui_pack(cfg), get_saved_channels(cfg), action, back_callback)
+
+
 # ===================== Commands =====================
 async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -966,6 +991,57 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await q.answer()
         return
 
+    if data.startswith("ui:pickchannel:"):
+        parts = data.split(":", 3)
+        if len(parts) != 4:
+            await q.answer()
+            return
+        action = parts[2]
+        try:
+            idx = int(parts[3]) - 1
+        except ValueError:
+            await q.answer()
+            return
+
+        channels = get_saved_channels(cfg)
+        if idx < 0 or idx >= len(channels):
+            await q.answer()
+            return
+
+        context.user_data["active_channel_idx"] = idx
+        selected = channels[idx]
+        await q.answer()
+
+        if action == "creative_menu":
+            text = ui_text(cfg, "creative_menu_title") + "\n\n" + ui_text(cfg, "channel_selected_now").format(channel=selected)
+            await q.message.reply_text(text, reply_markup=build_creative_submenu(cfg))
+            return
+        if action == "rss_menu":
+            text = ui_text(cfg, "rss_menu_title") + "\n\n" + ui_text(cfg, "channel_selected_now").format(channel=selected)
+            await q.message.reply_text(text, reply_markup=build_rss_submenu(cfg))
+            return
+        if action in ("creative_editprompt", "rss_editprompt"):
+            mapped = "ui:creative:editprompt" if action == "creative_editprompt" else "ui:rss:editprompt"
+            q.data = mapped
+        elif action in ("creative_preview", "rss_preview"):
+            mapped = "ui:creative:preview" if action == "creative_preview" else "ui:rss:preview"
+            q.data = mapped
+        elif action in ("rss_feeds",):
+            q.data = "ui:rss:feeds"
+        elif action in ("schedule_rss_menu", "schedule_creative_menu"):
+            mapped = "ui:schedule:rss:menu" if action == "schedule_rss_menu" else "ui:schedule:creative:menu"
+            q.data = mapped
+        elif action in ("schedule_rss_edit", "schedule_creative_edit"):
+            mapped = "ui:schedule:rss:edit" if action == "schedule_rss_edit" else "ui:schedule:creative:edit"
+            q.data = mapped
+        elif action in ("schedule_rss_toggle", "schedule_creative_toggle"):
+            mapped = "ui:schedule:rss:toggle" if action == "schedule_rss_toggle" else "ui:schedule:creative:toggle"
+            q.data = mapped
+        else:
+            await q.message.reply_text(ui_text(cfg, "channel_selected_now").format(channel=selected))
+            return
+        data = q.data or ""
+
     if data == "ui:setup":
         await q.answer()
         try:
@@ -1002,43 +1078,112 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:mode:creative:menu":
         if not await enforce_mode_paywall(update, cfg, "creator"):
             return
+        selected, state = require_channel_context(cfg, context, "creative_menu")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_menu", "ui:modes"),
+            )
+            return
         await q.answer()
+        text = ui_text(cfg, "creative_menu_title") + "\n\n" + ui_text(cfg, "channel_selected_now").format(channel=selected)
         try:
-            await q.edit_message_text(text=ui_text(cfg, "creative_menu_title"), reply_markup=build_creative_submenu(cfg))
+            await q.edit_message_text(text=text, reply_markup=build_creative_submenu(cfg))
         except BadRequest:
-            await q.message.reply_text(text=ui_text(cfg, "creative_menu_title"), reply_markup=build_creative_submenu(cfg))
+            await q.message.reply_text(text=text, reply_markup=build_creative_submenu(cfg))
         return
 
     if data == "ui:creative:preview":
         if not await enforce_mode_paywall(update, cfg, "creator"):
             return
+        selected, state = require_channel_context(cfg, context, "creative_preview")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_preview", "ui:mode:creative:menu"),
+            )
+            return
         await q.answer()
         msg = creator_make_post(user_id, cfg)
-        await q.message.reply_text("🧪 Preview:\n\n" + msg, reply_markup=build_creative_submenu(cfg))
+        await q.message.reply_text(
+            ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n🧪 Preview:\n\n" + msg,
+            reply_markup=build_creative_submenu(cfg),
+        )
         return
 
     if data == "ui:mode:rss:menu":
         if not await enforce_mode_paywall(update, cfg, "rss"):
             return
+        selected, state = require_channel_context(cfg, context, "rss_menu")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "rss_menu", "ui:modes"),
+            )
+            return
         await q.answer()
+        text = ui_text(cfg, "rss_menu_title") + "\n\n" + ui_text(cfg, "channel_selected_now").format(channel=selected)
         try:
-            await q.edit_message_text(text=ui_text(cfg, "rss_menu_title"), reply_markup=build_rss_submenu(cfg))
+            await q.edit_message_text(text=text, reply_markup=build_rss_submenu(cfg))
         except BadRequest:
-            await q.message.reply_text(text=ui_text(cfg, "rss_menu_title"), reply_markup=build_rss_submenu(cfg))
+            await q.message.reply_text(text=text, reply_markup=build_rss_submenu(cfg))
         return
 
     if data == "ui:rss:preview":
         if not await enforce_mode_paywall(update, cfg, "rss"):
             return
+        selected, state = require_channel_context(cfg, context, "rss_preview")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "rss_preview", "ui:mode:rss:menu"),
+            )
+            return
         await q.answer()
         preview = rss_preview_text(user_id, cfg)
-        await q.message.reply_text(preview, reply_markup=build_rss_submenu(cfg))
+        await q.message.reply_text(
+            ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + preview,
+            reply_markup=build_rss_submenu(cfg),
+        )
         return
 
     if data in ("ui:schedule:rss:menu", "ui:schedule:creative:menu"):
         mode = "creative" if data.endswith("creative:menu") else "rss"
+        action = "schedule_creative_menu" if mode == "creative" else "schedule_rss_menu"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, action, "ui:setup:scheduling"),
+            )
+            return
         await q.answer()
-        text = schedule_mode_menu_text(cfg, mode)
+        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + schedule_mode_menu_text(cfg, mode)
         try:
             await q.edit_message_text(text=text, reply_markup=build_mode_schedule_submenu(cfg, mode))
         except BadRequest:
@@ -1047,18 +1192,46 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data in ("ui:schedule:rss:edit", "ui:schedule:creative:edit"):
         mode = "creative" if data.endswith("creative:edit") else "rss"
+        action = "schedule_creative_edit" if mode == "creative" else "schedule_rss_edit"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, action, f"ui:schedule:{mode}:menu"),
+            )
+            return
         context.user_data["awaiting_schedule_mode"] = mode
         await q.answer()
         await q.message.reply_text(
-            ui_text(cfg, "schedule_input_instructions") + "\n\n" + ui_text(cfg, "schedule_current").format(
-                schedule=schedule_summary_for_mode(cfg, mode)
-            ),
+            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            + "\n\n"
+            + ui_text(cfg, "schedule_input_instructions")
+            + "\n\n"
+            + ui_text(cfg, "schedule_current").format(schedule=schedule_summary_for_mode(cfg, mode)),
             reply_markup=build_mode_schedule_submenu(cfg, mode),
         )
         return
 
     if data in ("ui:schedule:rss:toggle", "ui:schedule:creative:toggle"):
         mode = "creative" if data.endswith("creative:toggle") else "rss"
+        action = "schedule_creative_toggle" if mode == "creative" else "schedule_rss_toggle"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, action, f"ui:schedule:{mode}:menu"),
+            )
+            return
         enabled, _, _, _ = mode_schedule_state(cfg, mode)
         if mode == "creative":
             cfg["creative_schedule_enabled"] = not enabled
@@ -1068,7 +1241,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             notice = ui_text(cfg, "schedule_enabled") if not enabled else ui_text(cfg, "schedule_disabled")
         save_client(user_id, cfg)
         await q.answer()
-        text = notice + "\n\n" + schedule_mode_menu_text(cfg, mode)
+        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + notice + "\n\n" + schedule_mode_menu_text(cfg, mode)
         try:
             await q.edit_message_text(text=text, reply_markup=build_mode_schedule_submenu(cfg, mode))
         except BadRequest:
@@ -1076,7 +1249,19 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:rss:feeds":
-        text = ui_text(cfg, "feed_management_title") + "\n\n" + feeds_overview(cfg)
+        selected, state = require_channel_context(cfg, context, "rss_feeds")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "rss_feeds", "ui:mode:rss:menu"),
+            )
+            return
+        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + ui_text(cfg, "feed_management_title") + "\n\n" + feeds_overview(cfg)
         await q.answer()
         try:
             await q.edit_message_text(text=text, reply_markup=build_feed_menu(cfg))
@@ -1085,8 +1270,20 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:feedsdelete":
+        selected, state = require_channel_context(cfg, context, "rss_feeds")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "rss_feeds", "ui:mode:rss:menu"),
+            )
+            return
         feeds = cfg.get("feeds", [])
-        text = feeds_overview(cfg)
+        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + feeds_overview(cfg)
         await q.answer()
         if not feeds:
             try:
@@ -1103,12 +1300,26 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:creative:editprompt":
         if not await enforce_mode_paywall(update, cfg, "creator"):
             return
+        selected, state = require_channel_context(cfg, context, "creative_editprompt")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_editprompt", "ui:mode:creative:menu"),
+            )
+            return
         current = get_mode_prompt(user_id, cfg, "creative").strip()
         current_text = ui_text(cfg, "prompt_current_creative").format(prompt=current[:1500]) if current else ui_text(cfg, "prompt_empty")
         context.user_data["awaiting_prompt_mode"] = "creative"
         await q.answer()
         await q.message.reply_text(
-            current_text
+            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            + "\n\n"
+            + current_text
             + "\n\n"
             + ui_text(cfg, "prompt_guidance_creative")
             + "\n\n"
@@ -1121,12 +1332,26 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:rss:editprompt":
         if not await enforce_mode_paywall(update, cfg, "rss"):
             return
+        selected, state = require_channel_context(cfg, context, "rss_editprompt")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "rss_editprompt", "ui:mode:rss:menu"),
+            )
+            return
         current = get_mode_prompt(user_id, cfg, "rss").strip()
         current_text = ui_text(cfg, "prompt_current_rss").format(prompt=current[:1500]) if current else ui_text(cfg, "prompt_empty")
         context.user_data["awaiting_prompt_mode"] = "rss"
         await q.answer()
         await q.message.reply_text(
-            current_text
+            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            + "\n\n"
+            + current_text
             + "\n\n"
             + ui_text(cfg, "prompt_guidance_rss")
             + "\n\n"
@@ -1188,6 +1413,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         removed = channels[idx]
         cfg["channel"] = None
         save_client(user_id, cfg)
+        context.user_data.pop("active_channel_idx", None)
         text = (
             ui_text(cfg, "channel_deleted_named").format(channel=removed)
             + "\n\n"
@@ -1347,6 +1573,7 @@ async def setchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     cfg["channel"] = channel
     save_client(user_id, cfg)
+    context.user_data["active_channel_idx"] = 0
     await update.message.reply_text(f"✅ Channel saved: {channel}")
 
 async def unsetchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1354,6 +1581,7 @@ async def unsetchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     cfg = load_client(user_id)
     cfg["channel"] = None
     save_client(user_id, cfg)
+    context.user_data.pop("active_channel_idx", None)
     await send_menu(update, cfg, "✅ Channel cleared.")
 
 
