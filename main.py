@@ -754,6 +754,14 @@ def build_main_menu_clean(cfg: dict) -> InlineKeyboardMarkup:
     return build_main_menu_minimal(ui_pack(cfg))
 
 
+def build_help_text(cfg: dict) -> str:
+    return (
+        f"{ui_text(cfg, 'help_open_link')}\n"
+        f"{ui_text(cfg, 'help_link')}\n\n"
+        f"{ui_text(cfg, 'help_contact')}"
+    )
+
+
 def build_setup_menu(cfg: dict) -> InlineKeyboardMarkup:
     return build_setup_submenu(ui_pack(cfg), bool(cfg.get("autopost_enabled")))
 
@@ -1055,7 +1063,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
         return
 
-    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
+    await send_menu(update, cfg, build_help_text(cfg))
 
 from telegram.error import BadRequest
 from telegram import Update
@@ -1194,22 +1202,10 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:creative:preview":
         if not await enforce_mode_paywall(update, cfg, "creator"):
             return
-        selected, state = require_channel_context(cfg, context, "creative_preview")
-        if state == "empty":
-            await q.answer()
-            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
-            return
-        if state == "pick":
-            await q.answer()
-            await q.message.reply_text(
-                ui_text(cfg, "channel_picker_title"),
-                reply_markup=build_channel_picker(cfg, "creative_preview", "ui:mode:creative:menu"),
-            )
-            return
         await q.answer()
         msg = creator_make_post(user_id, cfg)
         await q.message.reply_text(
-            ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n🧪 Preview:\n\n" + msg,
+            "🧪 Preview:\n\n" + msg,
             reply_markup=build_creative_submenu(cfg),
         )
         return
@@ -1240,25 +1236,12 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:rss:preview":
         if not await enforce_mode_paywall(update, cfg, "rss"):
             return
-        selected, state = require_channel_context(cfg, context, "rss_preview")
-        if state == "empty":
-            await q.answer()
-            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
-            return
-        if state == "pick":
-            await q.answer()
-            await q.message.reply_text(
-                ui_text(cfg, "channel_picker_title"),
-                reply_markup=build_channel_picker(cfg, "rss_preview", "ui:mode:rss:menu"),
-            )
-            return
         await q.answer()
         preview, image_url = rss_preview_text(user_id, cfg)
-        header = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n"
         if image_url:
-            await q.message.reply_photo(photo=image_url, caption=(header + preview)[:1024], reply_markup=build_rss_submenu(cfg))
+            await q.message.reply_photo(photo=image_url, caption=preview[:1024], reply_markup=build_rss_submenu(cfg))
         else:
-            await q.message.reply_text(header + preview, reply_markup=build_rss_submenu(cfg))
+            await q.message.reply_text(preview, reply_markup=build_rss_submenu(cfg))
         return
 
     if data in ("ui:schedule:rss:menu", "ui:schedule:creative:menu"):
@@ -1591,7 +1574,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:help":
-        await send_menu(update, cfg, tr(cfg, "setup_check"))
+        await send_menu(update, cfg, build_help_text(cfg))
         return
 
     if data == "ui:pay":
