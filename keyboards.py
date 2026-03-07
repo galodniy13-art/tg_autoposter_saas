@@ -90,8 +90,21 @@ def build_rss_ai_menu(labels: dict) -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(labels["btn_edit_prompt"], callback_data="ui:rss:editprompt")],
             [InlineKeyboardButton(labels["btn_edit_feeds"], callback_data="ui:rss:feeds")],
+            [InlineKeyboardButton(labels["btn_rss_output_settings"], callback_data="ui:rss:output")],
             [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:rss:preview")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:modes")],
+        ]
+    )
+
+
+def build_rss_output_menu(labels: dict, include_source_link: bool, use_feed_image: bool) -> InlineKeyboardMarkup:
+    source_label = labels["btn_source_link_on"] if include_source_link else labels["btn_source_link_off"]
+    image_label = labels["btn_feed_image_on"] if use_feed_image else labels["btn_feed_image_off"]
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(source_label, callback_data="ui:rss:toggle_source_link")],
+            [InlineKeyboardButton(image_label, callback_data="ui:rss:toggle_feed_image")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:rss:menu")],
         ]
     )
 

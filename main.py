@@ -24,6 +24,7 @@ from keyboards import (
     build_channel_management_menu,
     build_creative_menu,
     build_rss_ai_menu,
+    build_rss_output_menu,
     build_feed_management_menu,
     build_feed_delete_menu,
     build_channel_delete_menu,
@@ -346,6 +347,8 @@ DEFAULT_CLIENT = {
     "channel_slots": 0,
     "feeds": [],
     "posted_urls": [],
+    "include_rss_source_link": True,
+    "use_rss_feed_image": True,
 
     "autopost_enabled": False,
     "interval_minutes": 30,
@@ -559,6 +562,86 @@ def extract_summary_for_link(feed_url: str, link_normalized: str, limit: int = 2
             return clean_text(getattr(e, "summary", "") or getattr(e, "description", "") or "")
     return ""
 
+
+def _entry_get(entry, key, default=None):
+    if isinstance(entry, dict):
+        return entry.get(key, default)
+    return getattr(entry, key, default)
+
+
+def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int = 20) -> str | None:
+    fp = feedparser.parse(feed_url)
+    entries = getattr(fp, "entries", []) or []
+    for e in entries[:limit]:
+        link = _entry_get(e, "link")
+        if not link or normalize_url(link) != link_normalized:
+            continue
+
+        media_content = _entry_get(e, "media_content", []) or []
+        for item in media_content:
+            if not isinstance(item, dict):
+                continue
+            url = (item.get("url") or "").strip()
+            if url:
+                return url
+
+        media_thumbnail = _entry_get(e, "media_thumbnail", []) or []
+        for item in media_thumbnail:
+            if not isinstance(item, dict):
+                continue
+            url = (item.get("url") or "").strip()
+            if url:
+                return url
+
+        enclosures = _entry_get(e, "enclosures", []) or []
+        for item in enclosures:
+            if not isinstance(item, dict):
+                continue
+            url = (item.get("url") or "").strip()
+            etype = (item.get("type") or "").lower()
+            if url and ("image" in etype or not etype):
+                return url
+
+        html_chunks = []
+        summary = _entry_get(e, "summary", "") or _entry_get(e, "description", "") or ""
+        if summary:
+            html_chunks.append(summary)
+        content = _entry_get(e, "content", []) or []
+        for item in content:
+            if isinstance(item, dict):
+                value = (item.get("value") or "").strip()
+                if value:
+                    html_chunks.append(value)
+
+        for chunk in html_chunks:
+            m = re.search(r"<img[^>]+src=[\"'\"]([^\"'\"]+)[\"'\"]", chunk, flags=re.IGNORECASE)
+            if m:
+                return m.group(1).strip()
+
+        break
+    return None
+
+
+def format_rss_message(cfg: dict, msg: str, link: str) -> str:
+    if bool(cfg.get("include_rss_source_link", True)):
+        return f"{msg}\n\n{link}"
+    return msg
+
+
+async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str, image_url: str | None) -> None:
+    final_text = format_rss_message(cfg, msg, link)
+    if bool(cfg.get("use_rss_feed_image", True)) and image_url:
+        caption = final_text
+        if len(caption) > 1024:
+            await bot.send_photo(chat_id=channel, photo=image_url, caption=caption[:1024])
+            if len(final_text) > 1024:
+                await bot.send_message(chat_id=channel, text=final_text[1024:], disable_web_page_preview=False)
+            return
+        await bot.send_photo(chat_id=channel, photo=image_url, caption=caption)
+        return
+
+    await bot.send_message(chat_id=channel, text=final_text, disable_web_page_preview=False)
+
 # ===================== LLM providers =====================
 def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str) -> str:
     style_prompt = get_mode_prompt(user_id, cfg, "rss")
@@ -689,6 +772,14 @@ def build_creative_submenu(cfg: dict) -> InlineKeyboardMarkup:
 
 def build_rss_submenu(cfg: dict) -> InlineKeyboardMarkup:
     return build_rss_ai_menu(ui_pack(cfg))
+
+
+def build_rss_output_submenu(cfg: dict) -> InlineKeyboardMarkup:
+    return build_rss_output_menu(
+        ui_pack(cfg),
+        bool(cfg.get("include_rss_source_link", True)),
+        bool(cfg.get("use_rss_feed_image", True)),
+    )
 
 
 def build_feed_menu(cfg: dict) -> InlineKeyboardMarkup:
@@ -836,18 +927,18 @@ def parse_schedule_input(text: str) -> list[str] | None:
     return sorted(set(chunks))
 
 
-def rss_preview_text(user_id: int, cfg: dict) -> str:
+def rss_preview_text(user_id: int, cfg: dict) -> tuple[str, str | None]:
     feeds = cfg.get("feeds", [])
     if not feeds:
-        return ui_text(cfg, "preview_no_feeds")
+        return ui_text(cfg, "preview_no_feeds"), None
     best = pick_newest_unseen(cfg)
     if not best:
-        return "No new items found (or everything already posted)."
+        return "No new items found (or everything already posted).", None
     _, title, link, src = best
     summary = extract_summary_for_link(src, link)
     msg = llm_generate_post(user_id, cfg, title, summary, link)
-    return "🧪 Preview:\n\n" + msg
-
+    image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
+    return "🧪 Preview:\n\n" + format_rss_message(cfg, msg, link), image_url
 
 def feeds_overview(cfg: dict) -> str:
     feeds = cfg.get("feeds", [])
@@ -1028,6 +1119,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             q.data = mapped
         elif action in ("rss_feeds",):
             q.data = "ui:rss:feeds"
+        elif action == "rss_output":
+            q.data = "ui:rss:output"
         elif action in ("schedule_rss_menu", "schedule_creative_menu"):
             mapped = "ui:schedule:rss:menu" if action == "schedule_rss_menu" else "ui:schedule:creative:menu"
             q.data = mapped
@@ -1160,14 +1253,16 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
         await q.answer()
-        preview = rss_preview_text(user_id, cfg)
-        await q.message.reply_text(
-            ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + preview,
-            reply_markup=build_rss_submenu(cfg),
-        )
+        preview, image_url = rss_preview_text(user_id, cfg)
+        header = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n"
+        if image_url:
+            await q.message.reply_photo(photo=image_url, caption=(header + preview)[:1024], reply_markup=build_rss_submenu(cfg))
+        else:
+            await q.message.reply_text(header + preview, reply_markup=build_rss_submenu(cfg))
         return
 
     if data in ("ui:schedule:rss:menu", "ui:schedule:creative:menu"):
+
         mode = "creative" if data.endswith("creative:menu") else "rss"
         action = "schedule_creative_menu" if mode == "creative" else "schedule_rss_menu"
         selected, state = require_channel_context(cfg, context, action)
@@ -1246,6 +1341,49 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.edit_message_text(text=text, reply_markup=build_mode_schedule_submenu(cfg, mode))
         except BadRequest:
             await q.message.reply_text(text=text, reply_markup=build_mode_schedule_submenu(cfg, mode))
+        return
+
+    if data == "ui:rss:output":
+        selected, state = require_channel_context(cfg, context, "rss_output")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "rss_output", "ui:mode:rss:menu"),
+            )
+            return
+        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + ui_text(cfg, "rss_output_settings_title")
+        await q.answer()
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_rss_output_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_rss_output_submenu(cfg))
+        return
+
+    if data == "ui:rss:toggle_source_link":
+        cfg["include_rss_source_link"] = not bool(cfg.get("include_rss_source_link", True))
+        save_client(user_id, cfg)
+        await q.answer()
+        text = ui_text(cfg, "rss_output_settings_title")
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_rss_output_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_rss_output_submenu(cfg))
+        return
+
+    if data == "ui:rss:toggle_feed_image":
+        cfg["use_rss_feed_image"] = not bool(cfg.get("use_rss_feed_image", True))
+        save_client(user_id, cfg)
+        await q.answer()
+        text = ui_text(cfg, "rss_output_settings_title")
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_rss_output_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_rss_output_submenu(cfg))
         return
 
     if data == "ui:rss:feeds":
@@ -1947,7 +2085,8 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         _, title, link, src = best
         summary = extract_summary_for_link(src, link)
         rss_msg = llm_generate_post(user_id, cfg, title, summary, link)
-        await reply_ui(update, "🧪 Preview (RSS):\n\n" + rss_msg + "\n\n————\n🧪 Preview (Creator):\n\n" + creator_msg, cfg, show_menu=True)
+        rss_preview = format_rss_message(cfg, rss_msg, link)
+        await reply_ui(update, "🧪 Preview (RSS):\n\n" + rss_preview + "\n\n————\n🧪 Preview (Creator):\n\n" + creator_msg, cfg, show_menu=True)
         return
 
     if not feeds:
@@ -1959,7 +2098,11 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await reply_ui(update, "No new items found (or everything already posted).", cfg, show_menu=True)
         return
 
-    await reply_ui(update, rss_preview_text(user_id, cfg), cfg, show_menu=True)
+    preview, image_url = rss_preview_text(user_id, cfg)
+    if image_url and update.message:
+        await update.message.reply_photo(photo=image_url, caption=preview[:1024], reply_markup=build_main_menu_clean(cfg))
+        return
+    await reply_ui(update, preview, cfg, show_menu=True)
 
 async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -1997,7 +2140,8 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             _, title, link, src = best
             summary = extract_summary_for_link(src, link)
             msg = llm_generate_post(user_id, cfg, title, summary, link)
-            await context.bot.send_message(chat_id=channel, text=msg, disable_web_page_preview=False)
+            image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
+            await send_rss_to_channel(context.bot, cfg, channel, msg, link, image_url)
             cfg.setdefault("posted_urls", [])
             cfg["posted_urls"].append(link)
             cfg["posted_urls"] = cfg["posted_urls"][-int(cfg.get("max_dedupe", 1500)):]
@@ -2025,8 +2169,9 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     _, title, link, src = best
     summary = extract_summary_for_link(src, link)
     msg = llm_generate_post(user_id, cfg, title, summary, link)
+    image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
 
-    await context.bot.send_message(chat_id=channel, text=msg, disable_web_page_preview=False)
+    await send_rss_to_channel(context.bot, cfg, channel, msg, link, image_url)
 
     cfg.setdefault("posted_urls", [])
     cfg["posted_urls"].append(link)
@@ -2376,8 +2521,9 @@ async def autopost_loop(app: Application) -> None:
                 _, title, link, src = best
                 summary = extract_summary_for_link(src, link)
                 msg = llm_generate_post(user_id, cfg, title, summary, link)
+                image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
 
-                await app.bot.send_message(chat_id=channel, text=msg, disable_web_page_preview=False)
+                await send_rss_to_channel(app.bot, cfg, channel, msg, link, image_url)
 
                 cfg.setdefault("posted_urls", [])
                 cfg["posted_urls"].append(link)
