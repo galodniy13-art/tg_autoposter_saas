@@ -80,9 +80,42 @@ def build_creative_menu(labels: dict) -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(labels["btn_edit_prompt"], callback_data="ui:creative:editprompt")],
             [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:creative:preview")],
+            [InlineKeyboardButton(labels["btn_content_variety"], callback_data="ui:creative:variety")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:modes")],
         ]
     )
+
+
+def build_creative_variety_menu(labels: dict, variation_level: str, avoid_repetition: bool) -> InlineKeyboardMarkup:
+    level_label = labels["variation_level_value_" + variation_level]
+    avoid_label = labels["btn_avoid_repetition_on"] if avoid_repetition else labels["btn_avoid_repetition_off"]
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(labels["btn_variation_level"] + f": {level_label}", callback_data="ui:creative:variety:level")],
+            [InlineKeyboardButton(labels["btn_post_types"], callback_data="ui:creative:variety:types")],
+            [InlineKeyboardButton(avoid_label, callback_data="ui:creative:variety:avoid")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
+        ]
+    )
+
+
+def build_creative_variation_level_menu(labels: dict, variation_level: str) -> InlineKeyboardMarkup:
+    rows = []
+    for level in ("low", "balanced", "high"):
+        marker = "✅ " if level == variation_level else ""
+        rows.append([InlineKeyboardButton(marker + labels["variation_level_value_" + level], callback_data=f"ui:creative:variety:level:{level}")])
+    rows.append([InlineKeyboardButton(labels["btn_back"], callback_data="ui:creative:variety")])
+    return InlineKeyboardMarkup(rows)
+
+
+def build_creative_post_types_menu(labels: dict, selected_types: list[str]) -> InlineKeyboardMarkup:
+    rows = []
+    for post_type in ("educational", "opinion", "story", "checklist", "question", "myth_vs_fact", "mini_case"):
+        enabled = post_type in selected_types
+        marker = "✅ " if enabled else "◻️ "
+        rows.append([InlineKeyboardButton(marker + labels["post_type_" + post_type], callback_data=f"ui:creative:variety:type:{post_type}")])
+    rows.append([InlineKeyboardButton(labels["btn_back"], callback_data="ui:creative:variety")])
+    return InlineKeyboardMarkup(rows)
 
 
 def build_rss_ai_menu(labels: dict) -> InlineKeyboardMarkup:

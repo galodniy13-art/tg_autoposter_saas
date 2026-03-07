@@ -23,6 +23,9 @@ from keyboards import (
     build_payment_menu,
     build_channel_management_menu,
     build_creative_menu,
+    build_creative_variety_menu,
+    build_creative_variation_level_menu,
+    build_creative_post_types_menu,
     build_rss_ai_menu,
     build_rss_output_menu,
     build_feed_management_menu,
@@ -106,6 +109,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-chat").strip()
 
 DEFAULT_STYLE_FILE = "default_ru.txt"
+CREATIVE_POST_TYPES = ["educational", "opinion", "story", "checklist", "question", "myth_vs_fact", "mini_case"]
+CREATIVE_VARIATION_LEVELS = {"low", "balanced", "high"}
 
 # ===================== Texts (EN/RU) =====================
 TEXTS = {
@@ -370,6 +375,10 @@ DEFAULT_CLIENT = {
     "daily_date": str(date.today()),
     "rss_daily_limit": 0,
     "creative_daily_limit": 0,
+    "creative_variation_level": "balanced",
+    "creative_post_types": list(CREATIVE_POST_TYPES),
+    "creative_avoid_repetition": True,
+    "creative_last_post_type_idx": -1,
 
     "max_dedupe": 1500,
     "fetch_entries_per_feed": 15,
@@ -701,6 +710,29 @@ def llm_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: s
     return ollama_generate_post(user_id, cfg, title, summary, link)
 
 # ===================== Creator mode (text-only) =====================
+def creative_variation_level(cfg: dict) -> str:
+    level = (cfg.get("creative_variation_level") or "balanced").strip().lower()
+    return level if level in CREATIVE_VARIATION_LEVELS else "balanced"
+
+
+def creative_post_types(cfg: dict) -> list[str]:
+    selected = cfg.get("creative_post_types")
+    if not isinstance(selected, list):
+        return list(CREATIVE_POST_TYPES)
+    valid = [p for p in selected if p in CREATIVE_POST_TYPES]
+    return valid or list(CREATIVE_POST_TYPES)
+
+
+def creative_next_post_type(cfg: dict) -> str:
+    selected = creative_post_types(cfg)
+    if len(selected) == 1:
+        return selected[0]
+    last_idx = int(cfg.get("creative_last_post_type_idx", -1) or -1)
+    next_idx = (last_idx + 1) % len(selected)
+    cfg["creative_last_post_type_idx"] = next_idx
+    return selected[next_idx]
+
+
 def creator_make_post(user_id: int, cfg: dict) -> str:
     style_prompt = get_mode_prompt(user_id, cfg, "creative")
     profile = (cfg.get("creator_profile") or "").strip()
@@ -709,10 +741,27 @@ def creator_make_post(user_id: int, cfg: dict) -> str:
         # minimal fallback
         profile = "Эксперт/блогер. Пишет полезные короткие посты для своей аудитории."
 
+    variation = creative_variation_level(cfg)
+    post_type = creative_next_post_type(cfg)
+    avoid_repetition = bool(cfg.get("creative_avoid_repetition", True))
+
+    variation_guidance = {
+        "low": "Variation level: low. Keep style stable and structure mostly consistent for brand continuity.",
+        "balanced": "Variation level: balanced. Add moderate variety in hook and angle while keeping output predictable.",
+        "high": "Variation level: high. Use broader variation in hook, structure, and angle while staying Telegram-appropriate and on-brand.",
+    }
+
     prompt = (
         "Write one Telegram-ready post following the system prompt. Return plain text only (no JSON, no code blocks).\n\n"
-        f"Creator profile:\n{profile}\n"
+        f"Creator profile:\n{profile}\n\n"
+        f"Post type for this generation: {post_type}.\n"
+        f"{variation_guidance[variation]}\n"
     )
+
+    if avoid_repetition:
+        prompt += "Avoid repeating the same hook, structure, CTA, and sentence rhythm too often. Keep it light and natural.\n"
+
+    temperature = 0.75 if variation == "low" else 0.85 if variation == "balanced" else 0.95
 
     if LLM_PROVIDER == "openai_compat":
         url = OPENAI_BASE_URL.rstrip("/") + "/chat/completions"
@@ -723,7 +772,7 @@ def creator_make_post(user_id: int, cfg: dict) -> str:
                 {"role": "system", "content": style_prompt},
                 {"role": "user", "content": prompt},
             ],
-            "temperature": 0.85,
+            "temperature": temperature,
         }
         r = requests.post(url, headers=headers, json=payload, timeout=60)
         r.raise_for_status()
@@ -776,6 +825,22 @@ def build_modes_submenu(cfg: dict) -> InlineKeyboardMarkup:
 
 def build_creative_submenu(cfg: dict) -> InlineKeyboardMarkup:
     return build_creative_menu(ui_pack(cfg))
+
+
+def build_creative_variety_submenu(cfg: dict) -> InlineKeyboardMarkup:
+    return build_creative_variety_menu(
+        ui_pack(cfg),
+        creative_variation_level(cfg),
+        bool(cfg.get("creative_avoid_repetition", True)),
+    )
+
+
+def build_creative_variation_level_submenu(cfg: dict) -> InlineKeyboardMarkup:
+    return build_creative_variation_level_menu(ui_pack(cfg), creative_variation_level(cfg))
+
+
+def build_creative_post_types_submenu(cfg: dict) -> InlineKeyboardMarkup:
+    return build_creative_post_types_menu(ui_pack(cfg), creative_post_types(cfg))
 
 
 def build_rss_submenu(cfg: dict) -> InlineKeyboardMarkup:
@@ -1138,6 +1203,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if action in ("creative_editprompt", "rss_editprompt"):
             mapped = "ui:creative:editprompt" if action == "creative_editprompt" else "ui:rss:editprompt"
             q.data = mapped
+        elif action == "creative_variety":
+            q.data = "ui:creative:variety"
         elif action in ("creative_preview", "rss_preview"):
             mapped = "ui:creative:preview" if action == "creative_preview" else "ui:rss:preview"
             q.data = mapped
@@ -1221,11 +1288,102 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.message.reply_text(text=text, reply_markup=build_creative_submenu(cfg))
         return
 
+    if data == "ui:creative:variety":
+        if not await enforce_mode_paywall(update, cfg, "creator"):
+            return
+        selected, state = require_channel_context(cfg, context, "creative_variety")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_variety", "ui:mode:creative:menu"),
+            )
+            return
+        await q.answer()
+        text = (
+            ui_text(cfg, "creative_variety_title")
+            + "\n\n"
+            + ui_text(cfg, "channel_selected_now").format(channel=selected)
+            + "\n\n"
+            + ui_text(cfg, "creative_variety_summary").format(
+                level=ui_text(cfg, "variation_level_value_" + creative_variation_level(cfg)),
+                post_types=", ".join(ui_text(cfg, "post_type_" + t) for t in creative_post_types(cfg)),
+                avoid=ui_text(cfg, "label_on") if bool(cfg.get("creative_avoid_repetition", True)) else ui_text(cfg, "label_off"),
+            )
+        )
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_creative_variety_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_creative_variety_submenu(cfg))
+        return
+
+    if data == "ui:creative:variety:level":
+        await q.answer()
+        try:
+            await q.edit_message_text(text=ui_text(cfg, "variation_level_title"), reply_markup=build_creative_variation_level_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=ui_text(cfg, "variation_level_title"), reply_markup=build_creative_variation_level_submenu(cfg))
+        return
+
+    if data.startswith("ui:creative:variety:level:"):
+        level = data.rsplit(":", 1)[1].strip().lower()
+        if level in CREATIVE_VARIATION_LEVELS:
+            cfg["creative_variation_level"] = level
+            save_client(user_id, cfg)
+        await q.answer()
+        try:
+            await q.edit_message_text(text=ui_text(cfg, "variation_level_title"), reply_markup=build_creative_variation_level_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=ui_text(cfg, "variation_level_title"), reply_markup=build_creative_variation_level_submenu(cfg))
+        return
+
+    if data == "ui:creative:variety:types":
+        await q.answer()
+        try:
+            await q.edit_message_text(text=ui_text(cfg, "post_types_title"), reply_markup=build_creative_post_types_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=ui_text(cfg, "post_types_title"), reply_markup=build_creative_post_types_submenu(cfg))
+        return
+
+    if data.startswith("ui:creative:variety:type:"):
+        post_type = data.rsplit(":", 1)[1].strip().lower()
+        selected_types = creative_post_types(cfg)
+        if post_type in CREATIVE_POST_TYPES:
+            if post_type in selected_types:
+                selected_types = [x for x in selected_types if x != post_type]
+            else:
+                selected_types.append(post_type)
+            cfg["creative_post_types"] = selected_types or list(CREATIVE_POST_TYPES)
+            cfg["creative_last_post_type_idx"] = -1
+            save_client(user_id, cfg)
+        await q.answer()
+        try:
+            await q.edit_message_text(text=ui_text(cfg, "post_types_title"), reply_markup=build_creative_post_types_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=ui_text(cfg, "post_types_title"), reply_markup=build_creative_post_types_submenu(cfg))
+        return
+
+    if data == "ui:creative:variety:avoid":
+        cfg["creative_avoid_repetition"] = not bool(cfg.get("creative_avoid_repetition", True))
+        save_client(user_id, cfg)
+        await q.answer()
+        text = ui_text(cfg, "creative_variety_title") + "\n\n" + ui_text(cfg, "creative_variety_note")
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_creative_variety_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_creative_variety_submenu(cfg))
+        return
+
     if data == "ui:creative:preview":
         if not await enforce_mode_paywall(update, cfg, "creator"):
             return
         await q.answer()
         msg = creator_make_post(user_id, cfg)
+        save_client(user_id, cfg)
         await q.message.reply_text(
             "🧪 Preview:\n\n" + msg,
             reply_markup=build_creative_submenu(cfg),
@@ -2151,6 +2309,7 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if mode == "creator":
         msg = creator_make_post(user_id, cfg)
+        save_client(user_id, cfg)
         await reply_ui(update, "🧪 Preview:\n\n" + msg, cfg, show_menu=True)
         return
 
@@ -2158,6 +2317,7 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if mode == "both":
         creator_msg = creator_make_post(user_id, cfg)
+        save_client(user_id, cfg)
         if not feeds:
             await reply_ui(update, "🧪 Preview (creator):\n\n" + creator_msg, cfg, show_menu=True)
             return
