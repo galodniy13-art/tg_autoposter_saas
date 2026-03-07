@@ -72,7 +72,41 @@ TEXTS = {
         "prompt_current_rss": "Current RSS + AI prompt:\n{prompt}",
         "prompt_current_creative": "Current Creative prompt:\n{prompt}",
         "prompt_empty": "No prompt saved yet. The default style is used.",
-        "prompt_edit_instructions": "Send a new prompt now. Send \"cancel\" to keep the current one.\nTip: include tone, topic, style, length, and target audience.",
+        "prompt_edit_instructions": "Send your final prompt in one message. Send \"cancel\" to keep the current one.",
+        "prompt_edit_cancel_hint": "Send \"cancel\" to keep the current prompt.",
+        "prompt_guidance_creative": (
+            "How to write a strong Creative prompt for Telegram:\n"
+            "• Topic/niche: what exactly you post about.\n"
+            "• Tone/voice: expert, friendly, bold, etc.\n"
+            "• Audience: who reads your channel.\n"
+            "• Length: typical size in lines/characters.\n"
+            "• Structure: hook → key points → takeaway.\n"
+            "• CTA: soft invite, question, DM, link, etc.\n"
+            "• Avoid: clichés, clickbait, banned/off-topic themes.\n\n"
+            "Template (copy and edit):\n"
+            "You write Telegram posts for [niche].\n"
+            "Tone: [tone/voice]. Audience: [target audience].\n"
+            "Each post is about [length].\n"
+            "Structure: 1) hook, 2) 2–4 practical points/examples, 3) concise conclusion, 4) CTA: [CTA style].\n"
+            "Avoid: [what to avoid]."
+        ),
+        "prompt_guidance_rss": (
+            "How to write a strong RSS + AI prompt for Telegram:\n"
+            "• Transform feed content: rewrite in your own style, not copy-paste.\n"
+            "• Tone/voice: professional, neutral, energetic, etc.\n"
+            "• Summary style: brief digest or more detailed explanation.\n"
+            "• Length: typical size in lines/characters.\n"
+            "• Opinion: allow your commentary or keep neutral.\n"
+            "• Ending/CTA: question, subscribe, share, none.\n"
+            "• Avoid: fake facts, hype, repetition, overly long intros.\n\n"
+            "Template (copy and edit):\n"
+            "Rewrite RSS/news items into Telegram posts in [tone].\n"
+            "Format: short hook + clear summary + key takeaway.\n"
+            "Length: [length].\n"
+            "Opinion mode: [neutral / add brief commentary].\n"
+            "Ending: [CTA or no CTA].\n"
+            "Avoid: [what to avoid]."
+        ),
         "prompt_edit_cancelled": "Prompt unchanged.",
         "prompt_edit_saved": "✅ Prompt updated.",
         "feeds_empty": "No feeds yet.",
@@ -169,7 +203,41 @@ TEXTS = {
         "prompt_current_rss": "Текущий промпт RSS + AI:\n{prompt}",
         "prompt_current_creative": "Текущий промпт Creative:\n{prompt}",
         "prompt_empty": "Промпт пока не сохранён. Используется стиль по умолчанию.",
-        "prompt_edit_instructions": "Отправьте новый промпт. Напишите \"cancel\", чтобы оставить текущий без изменений.\nПодсказка: укажите тон, тему, стиль, длину и целевую аудиторию.",
+        "prompt_edit_instructions": "Отправьте готовый промпт одним сообщением. Напишите \"cancel\", чтобы оставить текущий без изменений.",
+        "prompt_edit_cancel_hint": "Напишите \"cancel\", чтобы оставить текущий промпт без изменений.",
+        "prompt_guidance_creative": (
+            "Как написать хороший Creative-промпт для Telegram:\n"
+            "• Тема/ниша: о чём именно вы пишете.\n"
+            "• Тон/голос: экспертный, дружелюбный, дерзкий и т.д.\n"
+            "• Аудитория: для кого ваш канал.\n"
+            "• Длина: типичный объём в строках/символах.\n"
+            "• Структура: хук → основные мысли → вывод.\n"
+            "• CTA: мягкий призыв, вопрос, переход в ЛС, ссылка и т.д.\n"
+            "• Избегать: клише, кликбейта, запрещённых/нерелевантных тем.\n\n"
+            "Шаблон (скопируйте и отредактируйте):\n"
+            "Ты пишешь Telegram-посты для [ниша].\n"
+            "Тон: [тон/голос]. Аудитория: [целевая аудитория].\n"
+            "Объём каждого поста: [длина].\n"
+            "Структура: 1) цепляющий хук, 2) 2–4 практичные мысли/примера, 3) короткий вывод, 4) CTA: [стиль CTA].\n"
+            "Избегай: [что избегать]."
+        ),
+        "prompt_guidance_rss": (
+            "Как написать хороший RSS + AI промпт для Telegram:\n"
+            "• Преобразование контента: переписывай в вашем стиле, не копируй текст.\n"
+            "• Тон/голос: деловой, нейтральный, энергичный и т.д.\n"
+            "• Формат саммари: короткий дайджест или более подробное объяснение.\n"
+            "• Длина: типичный объём в строках/символах.\n"
+            "• Мнение: добавлять ваш комментарий или строго нейтрально.\n"
+            "• Завершение/CTA: вопрос, подписка, репост, без призыва.\n"
+            "• Избегать: выдуманных фактов, хайпа, повторов, слишком длинных вступлений.\n\n"
+            "Шаблон (скопируйте и отредактируйте):\n"
+            "Переписывай RSS/новости в Telegram-посты в тоне [тон].\n"
+            "Формат: короткий хук + понятное саммари + ключевой вывод.\n"
+            "Объём: [длина].\n"
+            "Режим мнения: [нейтрально / добавить краткий комментарий].\n"
+            "Завершение: [CTA или без CTA].\n"
+            "Избегай: [что избегать]."
+        ),
         "prompt_edit_cancelled": "Промпт не изменён.",
         "prompt_edit_saved": "✅ Промпт обновлён.",
         "feeds_empty": "Ленты пока не добавлены.",
