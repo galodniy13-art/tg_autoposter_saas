@@ -34,6 +34,7 @@ from keyboards import (
     build_channel_picker_menu,
     build_scheduling_menu,
     build_mode_schedule_menu,
+    build_prompt_builder_review_menu,
 )
 
 from texts import TEXTS as UI_TEXTS
@@ -808,6 +809,73 @@ def llm_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: s
         return openai_compat_generate_post(user_id, cfg, title, summary, link)
     return ollama_generate_post(user_id, cfg, title, summary, link)
 
+def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
+    if mode == "creative":
+        user_content = (
+            "Create a clean, practical system prompt for generating original Telegram posts.\n"
+            f"Niche/topic: {answers.get('q1', '')}\n"
+            f"Audience: {answers.get('q2', '')}\n"
+            f"Tone/voice: {answers.get('q3', '')}\n"
+            f"Preferred post types: {answers.get('q4', '')}\n"
+            f"Typical length: {answers.get('q5', '')}\n"
+            f"Avoid: {answers.get('q6', '')}\n"
+            f"CTA preference: {answers.get('q7', '')}\n\n"
+            "Return only the final prompt text. Keep it concise and Telegram-oriented."
+        )
+    else:
+        user_content = (
+            "Create a clean, practical system prompt for rewriting RSS/news into Telegram posts.\n"
+            f"Feed/topic: {answers.get('q1', '')}\n"
+            f"Audience: {answers.get('q2', '')}\n"
+            f"Tone/voice: {answers.get('q3', '')}\n"
+            f"Typical length: {answers.get('q4', '')}\n"
+            f"Style preference (neutral vs stronger angle): {answers.get('q5', '')}\n"
+            f"CTA preference: {answers.get('q6', '')}\n"
+            f"Avoid: {answers.get('q7', '')}\n\n"
+            "Return only the final prompt text. Keep it concise and Telegram-oriented."
+        )
+
+    system_content = (
+        "You are an expert prompt writer for Telegram content automation. "
+        "Produce one high-quality prompt that is practical, clear, and ready to use."
+    )
+
+    if LLM_PROVIDER == "openai_compat":
+        url = OPENAI_BASE_URL.rstrip("/") + "/chat/completions"
+        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+        payload = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": 0.8,
+        }
+        r = requests.post(url, headers=headers, json=payload, timeout=60)
+        r.raise_for_status()
+        data = r.json()
+        return clean_text(data["choices"][0]["message"]["content"])[:2000]
+
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": system_content + "\n\n" + user_content,
+        "stream": False,
+    }
+    r = requests.post(OLLAMA_URL, json=payload, timeout=60)
+    r.raise_for_status()
+    data = r.json()
+    return clean_text(data.get("response", ""))[:2000]
+
+
+def prompt_builder_questions(cfg: dict, mode: str) -> list[str]:
+    prefix = "prompt_builder_q_creative_" if mode == "creative" else "prompt_builder_q_rss_"
+    return [ui_text(cfg, prefix + str(i)) for i in range(1, 8)]
+
+
+def build_prompt_builder_review(cfg: dict, mode: str) -> InlineKeyboardMarkup:
+    return build_prompt_builder_review_menu(ui_pack(cfg), mode)
+
+
 # ===================== Creator mode (text-only) =====================
 def creative_variation_level(cfg: dict) -> str:
     level = (cfg.get("creative_variation_level") or "balanced").strip().lower()
@@ -1302,6 +1370,9 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if action in ("creative_editprompt", "rss_editprompt"):
             mapped = "ui:creative:editprompt" if action == "creative_editprompt" else "ui:rss:editprompt"
             q.data = mapped
+        elif action in ("creative_buildprompt", "rss_buildprompt"):
+            mapped = "ui:creative:buildprompt" if action == "creative_buildprompt" else "ui:rss:buildprompt"
+            q.data = mapped
         elif action == "creative_variety":
             q.data = "ui:creative:variety"
         elif action in ("creative_preview", "rss_preview"):
@@ -1749,6 +1820,111 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.message.reply_text(text=text, reply_markup=build_feeds_delete_menu(cfg))
         return
 
+    if data == "ui:creative:buildprompt":
+        if not await enforce_mode_paywall(update, cfg, "creator"):
+            return
+        selected, state = require_channel_context(cfg, context, "creative_buildprompt")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_buildprompt", "ui:mode:creative:menu"),
+            )
+            return
+        context.user_data["prompt_builder"] = {"mode": "creative", "step": 0, "answers": {}, "selected_channel": selected}
+        await q.answer()
+        questions = prompt_builder_questions(cfg, "creative")
+        await q.message.reply_text(
+            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            + "\n\n"
+            + ui_text(cfg, "prompt_builder_intro_creative")
+            + "\n\n"
+            + questions[0]
+        )
+        return
+
+    if data == "ui:rss:buildprompt":
+        if not await enforce_mode_paywall(update, cfg, "rss"):
+            return
+        selected, state = require_channel_context(cfg, context, "rss_buildprompt")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "rss_buildprompt", "ui:mode:rss:menu"),
+            )
+            return
+        context.user_data["prompt_builder"] = {"mode": "rss", "step": 0, "answers": {}, "selected_channel": selected}
+        await q.answer()
+        questions = prompt_builder_questions(cfg, "rss")
+        await q.message.reply_text(
+            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            + "\n\n"
+            + ui_text(cfg, "prompt_builder_intro_rss")
+            + "\n\n"
+            + questions[0]
+        )
+        return
+
+    if data.startswith("ui:promptbuilder:"):
+        parts = data.split(":")
+        if len(parts) != 4:
+            await q.answer()
+            return
+        mode = parts[2]
+        action = parts[3]
+        builder = context.user_data.get("prompt_builder") or {}
+        if builder.get("mode") != mode:
+            await q.answer()
+            return
+        if action == "cancel":
+            context.user_data.pop("prompt_builder", None)
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "prompt_builder_cancelled"))
+            await q.message.reply_text(
+                ui_text(cfg, "creative_menu_title") if mode == "creative" else ui_text(cfg, "rss_menu_title"),
+                reply_markup=build_creative_submenu(cfg) if mode == "creative" else build_rss_submenu(cfg),
+            )
+            return
+        if action == "save":
+            generated = (builder.get("generated_prompt") or "").strip()
+            if not generated:
+                await q.answer()
+                return
+            prompt_key = "creative_prompt" if mode == "creative" else "rss_prompt"
+            cfg[prompt_key] = generated
+            save_client(user_id, cfg)
+            context.user_data.pop("prompt_builder", None)
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "prompt_builder_saved"))
+            await q.message.reply_text(
+                ui_text(cfg, "creative_menu_title") if mode == "creative" else ui_text(cfg, "rss_menu_title"),
+                reply_markup=build_creative_submenu(cfg) if mode == "creative" else build_rss_submenu(cfg),
+            )
+            return
+        if action == "regenerate":
+            await q.answer()
+            try:
+                generated = llm_generate_prompt_builder(mode, builder.get("answers") or {})
+            except Exception:
+                await q.message.reply_text(ui_text(cfg, "prompt_builder_error"))
+                return
+            builder["generated_prompt"] = generated
+            context.user_data["prompt_builder"] = builder
+            await q.message.reply_text(
+                ui_text(cfg, "prompt_builder_review").format(prompt=generated),
+                reply_markup=build_prompt_builder_review(cfg, mode),
+            )
+            return
+
     if data == "ui:creative:editprompt":
         if not await enforce_mode_paywall(update, cfg, "creator"):
             return
@@ -2150,6 +2326,46 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         cfg[prompt_key] = text
         save_client(user_id, cfg)
         await send_prompt_parent_menu(update, cfg, awaiting_prompt_mode, ui_text(cfg, "prompt_edit_saved"))
+        return
+
+    prompt_builder = context.user_data.get("prompt_builder")
+    if prompt_builder:
+        mode = prompt_builder.get("mode")
+        if text.lower() == "cancel":
+            context.user_data.pop("prompt_builder", None)
+            await update.message.reply_text(
+                ui_text(cfg, "prompt_builder_cancelled")
+                + "\n\n"
+                + (ui_text(cfg, "creative_menu_title") if mode == "creative" else ui_text(cfg, "rss_menu_title")),
+                reply_markup=build_creative_submenu(cfg) if mode == "creative" else build_rss_submenu(cfg),
+            )
+            return
+
+        step = int(prompt_builder.get("step", 0))
+        answers = prompt_builder.get("answers") or {}
+        answers[f"q{step + 1}"] = text
+        prompt_builder["answers"] = answers
+        questions = prompt_builder_questions(cfg, mode)
+
+        if step + 1 < len(questions):
+            prompt_builder["step"] = step + 1
+            context.user_data["prompt_builder"] = prompt_builder
+            await update.message.reply_text(questions[step + 1])
+            return
+
+        await update.message.reply_text(ui_text(cfg, "prompt_builder_generating"))
+        try:
+            generated = llm_generate_prompt_builder(mode, answers)
+        except Exception:
+            context.user_data.pop("prompt_builder", None)
+            await update.message.reply_text(ui_text(cfg, "prompt_builder_error"))
+            return
+        prompt_builder["generated_prompt"] = generated
+        context.user_data["prompt_builder"] = prompt_builder
+        await update.message.reply_text(
+            ui_text(cfg, "prompt_builder_review").format(prompt=generated),
+            reply_markup=build_prompt_builder_review(cfg, mode),
+        )
         return
 
     awaiting_schedule_mode = context.user_data.get("awaiting_schedule_mode")
