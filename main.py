@@ -876,6 +876,18 @@ def build_prompt_builder_review(cfg: dict, mode: str) -> InlineKeyboardMarkup:
     return build_prompt_builder_review_menu(ui_pack(cfg), mode)
 
 
+def clear_prompt_interaction_state(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    clear_manual: bool = True,
+    clear_builder: bool = True,
+) -> None:
+    if clear_manual:
+        context.user_data.pop("awaiting_prompt_mode", None)
+    if clear_builder:
+        context.user_data.pop("prompt_builder", None)
+
+
 # ===================== Creator mode (text-only) =====================
 def creative_variation_level(cfg: dict) -> str:
     level = (cfg.get("creative_variation_level") or "balanced").strip().lower()
@@ -1835,6 +1847,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 reply_markup=build_channel_picker(cfg, "creative_buildprompt", "ui:mode:creative:menu"),
             )
             return
+        clear_prompt_interaction_state(context, clear_manual=True, clear_builder=False)
         context.user_data["prompt_builder"] = {"mode": "creative", "step": 0, "answers": {}, "selected_channel": selected}
         await q.answer()
         questions = prompt_builder_questions(cfg, "creative")
@@ -1862,6 +1875,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 reply_markup=build_channel_picker(cfg, "rss_buildprompt", "ui:mode:rss:menu"),
             )
             return
+        clear_prompt_interaction_state(context, clear_manual=True, clear_builder=False)
         context.user_data["prompt_builder"] = {"mode": "rss", "step": 0, "answers": {}, "selected_channel": selected}
         await q.answer()
         questions = prompt_builder_questions(cfg, "rss")
@@ -1942,6 +1956,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
         current = get_mode_prompt(user_id, cfg, "creative").strip()
         current_text = ui_text(cfg, "prompt_current_creative").format(prompt=current[:1500]) if current else ui_text(cfg, "prompt_empty")
+        clear_prompt_interaction_state(context, clear_manual=False, clear_builder=True)
         context.user_data["awaiting_prompt_mode"] = "creative"
         await q.answer()
         await q.message.reply_text(
@@ -1974,6 +1989,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
         current = get_mode_prompt(user_id, cfg, "rss").strip()
         current_text = ui_text(cfg, "prompt_current_rss").format(prompt=current[:1500]) if current else ui_text(cfg, "prompt_empty")
+        clear_prompt_interaction_state(context, clear_manual=False, clear_builder=True)
         context.user_data["awaiting_prompt_mode"] = "rss"
         await q.answer()
         await q.message.reply_text(
