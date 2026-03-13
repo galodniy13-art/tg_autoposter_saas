@@ -5,7 +5,7 @@ import re
 import threading
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl, urlencode
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import feedparser
@@ -578,6 +578,71 @@ def _entry_get(entry, key, default=None):
     return getattr(entry, key, default)
 
 
+def _safe_int(value) -> int | None:
+    try:
+        if value in (None, ""):
+            return None
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_image_url(url: str, base_url: str = "") -> str | None:
+    raw = (url or "").strip()
+    if not raw:
+        return None
+    full = urljoin(base_url, raw)
+    parsed = urlsplit(full)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    return full
+
+
+def _is_thumbnailish_url(url: str) -> bool:
+    return bool(re.search(r"(?i)(thumb|thumbnail|sprite|icon|avatar|\bsmall\b|\bmini\b|\b120x\b|\b150x\b)", url or ""))
+
+
+def _is_too_small(width: int | None, height: int | None) -> bool:
+    if width and height:
+        return width < 120 or height < 120 or (width * height < 20000)
+    return False
+
+
+def _candidate_score(priority: int, url: str, width: int | None, height: int | None) -> tuple[int, int, int, int]:
+    area = (width or 0) * (height or 0)
+    has_size = 1 if width and height else 0
+    non_thumb = 0 if _is_thumbnailish_url(url) else 1
+    return (priority, has_size, area, non_thumb)
+
+
+def _extract_og_image(article_url: str) -> str | None:
+    try:
+        r = requests.get(
+            article_url,
+            timeout=8,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; TGAutoPosterBot/1.0)"},
+        )
+        r.raise_for_status()
+        html = r.text or ""
+    except Exception:
+        return None
+
+    m = re.search(
+        r"<meta[^>]+(?:property|name)=[\"']og:image[\"'][^>]+content=[\"']([^\"']+)[\"']",
+        html,
+        flags=re.IGNORECASE,
+    )
+    if not m:
+        m = re.search(
+            r"<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+(?:property|name)=[\"']og:image[\"']",
+            html,
+            flags=re.IGNORECASE,
+        )
+    if not m:
+        return None
+    return _normalize_image_url(m.group(1), article_url)
+
+
 def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int = 20) -> str | None:
     fp = feedparser.parse(feed_url)
     entries = getattr(fp, "entries", []) or []
@@ -586,30 +651,37 @@ def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int =
         if not link or normalize_url(link) != link_normalized:
             continue
 
+        best_url = None
+        best_score = None
+
+        def consider(url: str, priority: int, width=None, height=None, base_url: str = ""):
+            nonlocal best_url, best_score
+            normalized = _normalize_image_url(url, base_url)
+            if not normalized:
+                return
+            w = _safe_int(width)
+            h = _safe_int(height)
+            if _is_too_small(w, h):
+                return
+            score = _candidate_score(priority, normalized, w, h)
+            if best_score is None or score > best_score:
+                best_score = score
+                best_url = normalized
+
         media_content = _entry_get(e, "media_content", []) or []
         for item in media_content:
             if not isinstance(item, dict):
                 continue
-            url = (item.get("url") or "").strip()
-            if url:
-                return url
-
-        media_thumbnail = _entry_get(e, "media_thumbnail", []) or []
-        for item in media_thumbnail:
-            if not isinstance(item, dict):
-                continue
-            url = (item.get("url") or "").strip()
-            if url:
-                return url
+            consider(item.get("url") or "", priority=500, width=item.get("width"), height=item.get("height"), base_url=link)
 
         enclosures = _entry_get(e, "enclosures", []) or []
         for item in enclosures:
             if not isinstance(item, dict):
                 continue
-            url = (item.get("url") or "").strip()
+            url = item.get("url") or ""
             etype = (item.get("type") or "").lower()
-            if url and ("image" in etype or not etype):
-                return url
+            if "image" in etype or not etype:
+                consider(url, priority=400, width=item.get("width"), height=item.get("height"), base_url=link)
 
         html_chunks = []
         summary = _entry_get(e, "summary", "") or _entry_get(e, "description", "") or ""
@@ -623,9 +695,36 @@ def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int =
                     html_chunks.append(value)
 
         for chunk in html_chunks:
-            m = re.search(r"<img[^>]+src=[\"'\"]([^\"'\"]+)[\"'\"]", chunk, flags=re.IGNORECASE)
-            if m:
-                return m.group(1).strip()
+            for m in re.finditer(r"<img\b[^>]*>", chunk, flags=re.IGNORECASE):
+                tag = m.group(0)
+                src_m = re.search(r"\bsrc=[\"'\"]([^\"'\"]+)[\"'\"]", tag, flags=re.IGNORECASE)
+                if not src_m:
+                    continue
+                width_m = re.search(r"\bwidth=[\"'\"]?(\d+)", tag, flags=re.IGNORECASE)
+                height_m = re.search(r"\bheight=[\"'\"]?(\d+)", tag, flags=re.IGNORECASE)
+                consider(
+                    src_m.group(1),
+                    priority=300,
+                    width=width_m.group(1) if width_m else None,
+                    height=height_m.group(1) if height_m else None,
+                    base_url=link,
+                )
+
+        if best_url:
+            return best_url
+
+        og_image = _extract_og_image(link)
+        if og_image:
+            return og_image
+
+        media_thumbnail = _entry_get(e, "media_thumbnail", []) or []
+        for item in media_thumbnail:
+            if not isinstance(item, dict):
+                continue
+            consider(item.get("url") or "", priority=100, width=item.get("width"), height=item.get("height"), base_url=link)
+
+        if best_url:
+            return best_url
 
         break
     return None
