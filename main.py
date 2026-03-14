@@ -1209,6 +1209,12 @@ def build_scheduling_submenu(cfg: dict) -> InlineKeyboardMarkup:
 
 
 def mode_schedule_state(cfg: dict, mode: str) -> tuple[bool, list[str], str, str]:
+    mode_times_key = "creative_schedule_times" if mode == "creative" else "rss_schedule_times"
+    mode_times_raw = cfg.get(mode_times_key)
+    mode_has_own_times = False
+    if isinstance(mode_times_raw, list):
+        mode_has_own_times = any(str(x).strip() for x in mode_times_raw)
+
     if mode == "creative":
         enabled = bool(cfg.get("creative_schedule_enabled"))
         times = cfg.get("creative_schedule_times", []) or []
@@ -1220,7 +1226,7 @@ def mode_schedule_state(cfg: dict, mode: str) -> tuple[bool, list[str], str, str
         last_date = cfg.get("rss_last_schedule_date")
         last_time = cfg.get("rss_last_schedule_time")
 
-    if not times and cfg.get("schedule_times"):
+    if not mode_has_own_times and not times and cfg.get("schedule_times"):
         enabled = bool(cfg.get("schedule_enabled"))
         times = cfg.get("schedule_times", []) or []
         last_date = cfg.get("last_schedule_date")
