@@ -1380,14 +1380,34 @@ def get_saved_channels(cfg: dict) -> list[str]:
     return normalize_channels(cfg)
 
 
+def clear_mode_channel_selection(context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop("mode_selected_channel", None)
+    # cleanup legacy state key
+    context.user_data.pop("mode_selected_channel_idx", None)
+
+
+def set_mode_channel_selection(context: ContextTypes.DEFAULT_TYPE, channel: str) -> None:
+    context.user_data["mode_selected_channel"] = channel
+    # cleanup legacy state key
+    context.user_data.pop("mode_selected_channel_idx", None)
+
+
+def mark_channel_selection_origin(context: ContextTypes.DEFAULT_TYPE, action: str) -> None:
+    context.user_data["mode_selected_for_action"] = action
+
+
+def consume_channel_selection_origin(context: ContextTypes.DEFAULT_TYPE, action: str) -> bool:
+    return context.user_data.pop("mode_selected_for_action", None) == action
+
+
 def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, action: str) -> tuple[str | None, str | None]:
     channels = get_saved_channels(cfg)
     if not channels:
-        context.user_data.pop("mode_selected_channel_idx", None)
+        clear_mode_channel_selection(context)
         context.user_data.pop("active_channel_idx", None)
         return None, "empty"
     if len(channels) == 1:
-        context.user_data["mode_selected_channel_idx"] = 0
+        set_mode_channel_selection(context, channels[0])
         context.user_data["active_channel_idx"] = 0
         switch_active_channel(cfg, channels[0])
         return channels[0], None
@@ -1417,11 +1437,12 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
     }
 
     if action in explicit_selection_actions:
-        idx = context.user_data.get("mode_selected_channel_idx")
-        if isinstance(idx, int) and 0 <= idx < len(channels):
-            context.user_data["active_channel_idx"] = idx
-            switch_active_channel(cfg, channels[idx])
-            return channels[idx], None
+        selected_channel = context.user_data.get("mode_selected_channel")
+        if isinstance(selected_channel, str) and selected_channel in channels:
+            context.user_data["active_channel_idx"] = channels.index(selected_channel)
+            switch_active_channel(cfg, selected_channel)
+            return selected_channel, None
+        clear_mode_channel_selection(context)
         return None, "pick"
 
     idx = context.user_data.get("active_channel_idx")
@@ -1544,8 +1565,9 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
 
         context.user_data["active_channel_idx"] = idx
-        context.user_data["mode_selected_channel_idx"] = idx
         selected = channels[idx]
+        set_mode_channel_selection(context, selected)
+        mark_channel_selection_origin(context, action)
         switch_active_channel(cfg, selected)
         save_client(user_id, cfg)
         await q.answer()
@@ -1594,7 +1616,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         data = q.data or ""
 
     if data == "ui:setup":
-        context.user_data.pop("mode_selected_channel_idx", None)
+        clear_mode_channel_selection(context)
         await q.answer()
         try:
             await q.edit_message_text(text=ui_text(cfg, "setup_menu_title"), reply_markup=build_setup_menu(cfg))
@@ -1612,6 +1634,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:setup:scheduling":
+        clear_mode_channel_selection(context)
         await q.answer()
         try:
             await q.edit_message_text(text=ui_text(cfg, "scheduling_menu_title"), reply_markup=build_scheduling_submenu(cfg))
@@ -1620,7 +1643,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:modes":
-        context.user_data.pop("mode_selected_channel_idx", None)
+        clear_mode_channel_selection(context)
         await q.answer()
         try:
             await q.edit_message_text(text=ui_text(cfg, "modes_menu_title"), reply_markup=build_modes_submenu(cfg))
@@ -1631,6 +1654,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:mode:creative:menu":
         if not await enforce_mode_paywall(update, cfg, "creator"):
             return
+        if not consume_channel_selection_origin(context, "creative_menu"):
+            clear_mode_channel_selection(context)
         selected, state = require_channel_context(cfg, context, "creative_menu")
         if state == "empty":
             await q.answer()
@@ -1768,6 +1793,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:mode:rss:menu":
         if not await enforce_mode_paywall(update, cfg, "rss"):
             return
+        if not consume_channel_selection_origin(context, "rss_menu"):
+            clear_mode_channel_selection(context)
         selected, state = require_channel_context(cfg, context, "rss_menu")
         if state == "empty":
             await q.answer()
@@ -1816,6 +1843,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         mode = "creative" if data.endswith("creative:menu") else "rss"
         action = "schedule_creative_menu" if mode == "creative" else "schedule_rss_menu"
+        if not consume_channel_selection_origin(context, action):
+            clear_mode_channel_selection(context)
         selected, state = require_channel_context(cfg, context, action)
         if state == "empty":
             await q.answer()
@@ -2342,6 +2371,7 @@ async def setup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
         return
 
+    clear_mode_channel_selection(context)
     await update.message.reply_text(ui_text(cfg, "setup_menu_title"), reply_markup=build_setup_menu(cfg))
 
 async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
