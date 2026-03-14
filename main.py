@@ -388,7 +388,25 @@ DEFAULT_CLIENT = {
     "style_file": DEFAULT_STYLE_FILE,
     "subscription_until": None,  # YYYY-MM-DD
     "subscription_plan": "FREE",
+    "channel_settings": {},
 }
+
+CHANNEL_SCOPED_KEYS = (
+    "rss_prompt",
+    "creative_prompt",
+    "feeds",
+    "posted_urls",
+    "include_rss_source_link",
+    "use_rss_feed_image",
+    "rss_schedule_enabled",
+    "rss_schedule_times",
+    "rss_last_schedule_date",
+    "rss_last_schedule_time",
+    "creative_schedule_enabled",
+    "creative_schedule_times",
+    "creative_last_schedule_date",
+    "creative_last_schedule_time",
+)
 
 # ===================== Storage helpers =====================
 def ensure_dirs() -> None:
@@ -422,10 +440,14 @@ def load_client(user_id: int) -> dict:
     for k, v in DEFAULT_CLIENT.items():
         cfg.setdefault(k, v)
     normalize_channels(cfg)
+    ensure_channel_settings(cfg)
+    apply_active_channel_settings(cfg)
     return cfg
 
 def save_client(user_id: int, cfg: dict) -> None:
     normalize_channels(cfg)
+    ensure_channel_settings(cfg)
+    persist_active_channel_settings(cfg)
     client_path(user_id).write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -455,6 +477,65 @@ def normalize_channels(cfg: dict) -> list[str]:
     cfg["channels"] = normalized
     cfg["channel"] = normalized[0] if normalized else None
     return normalized
+
+
+def _copy_scoped_value(value):
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, dict):
+        return dict(value)
+    return value
+
+
+def ensure_channel_settings(cfg: dict) -> dict:
+    channel_settings = cfg.get("channel_settings")
+    if not isinstance(channel_settings, dict):
+        channel_settings = {}
+    for channel in cfg.get("channels", []):
+        bucket = channel_settings.get(channel)
+        if not isinstance(bucket, dict):
+            bucket = {}
+            channel_settings[channel] = bucket
+        for key in CHANNEL_SCOPED_KEYS:
+            if key not in bucket and key in cfg:
+                bucket[key] = _copy_scoped_value(cfg.get(key))
+    for channel in list(channel_settings.keys()):
+        if channel not in cfg.get("channels", []):
+            channel_settings.pop(channel, None)
+    cfg["channel_settings"] = channel_settings
+    return channel_settings
+
+
+def persist_active_channel_settings(cfg: dict) -> None:
+    channel = cfg.get("channel")
+    if not channel:
+        return
+    channel_settings = ensure_channel_settings(cfg)
+    bucket = channel_settings.setdefault(channel, {})
+    for key in CHANNEL_SCOPED_KEYS:
+        if key in cfg:
+            bucket[key] = _copy_scoped_value(cfg.get(key))
+
+
+def apply_active_channel_settings(cfg: dict) -> None:
+    channel = cfg.get("channel")
+    if not channel:
+        return
+    channel_settings = ensure_channel_settings(cfg)
+    bucket = channel_settings.get(channel) or {}
+    for key in CHANNEL_SCOPED_KEYS:
+        if key in bucket:
+            cfg[key] = _copy_scoped_value(bucket[key])
+
+
+def switch_active_channel(cfg: dict, channel: str) -> None:
+    current = cfg.get("channel")
+    if current == channel:
+        return
+    if current:
+        persist_active_channel_settings(cfg)
+    cfg["channel"] = channel
+    apply_active_channel_settings(cfg)
 
 # ===================== Utility =====================
 def is_admin(user_id: int) -> bool:
@@ -933,6 +1014,7 @@ def clear_prompt_interaction_state(
 ) -> None:
     if clear_manual:
         context.user_data.pop("awaiting_prompt_mode", None)
+        context.user_data.pop("awaiting_prompt_channel", None)
     if clear_builder:
         context.user_data.pop("prompt_builder", None)
 
@@ -1295,10 +1377,12 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
         return None, "empty"
     if len(channels) == 1:
         context.user_data["active_channel_idx"] = 0
+        switch_active_channel(cfg, channels[0])
         return channels[0], None
 
     idx = context.user_data.get("active_channel_idx")
     if isinstance(idx, int) and 0 <= idx < len(channels):
+        switch_active_channel(cfg, channels[idx])
         return channels[idx], None
 
     return None, "pick"
@@ -1417,6 +1501,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         context.user_data["active_channel_idx"] = idx
         selected = channels[idx]
+        switch_active_channel(cfg, selected)
+        save_client(user_id, cfg)
         await q.answer()
 
         if action == "creative_menu":
@@ -1961,6 +2047,9 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             if not generated:
                 await q.answer()
                 return
+            selected_channel = (builder.get("selected_channel") or "").strip()
+            if selected_channel:
+                switch_active_channel(cfg, selected_channel)
             prompt_key = "creative_prompt" if mode == "creative" else "rss_prompt"
             cfg[prompt_key] = generated
             save_client(user_id, cfg)
@@ -2006,6 +2095,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         current_text = ui_text(cfg, "prompt_current_creative").format(prompt=current[:1500]) if current else ui_text(cfg, "prompt_empty")
         clear_prompt_interaction_state(context, clear_manual=False, clear_builder=True)
         context.user_data["awaiting_prompt_mode"] = "creative"
+        context.user_data["awaiting_prompt_channel"] = selected
         await q.answer()
         await q.message.reply_text(
             ui_text(cfg, "channel_selected_now").format(channel=selected)
@@ -2039,6 +2129,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         current_text = ui_text(cfg, "prompt_current_rss").format(prompt=current[:1500]) if current else ui_text(cfg, "prompt_empty")
         clear_prompt_interaction_state(context, clear_manual=False, clear_builder=True)
         context.user_data["awaiting_prompt_mode"] = "rss"
+        context.user_data["awaiting_prompt_channel"] = selected
         await q.answer()
         await q.message.reply_text(
             ui_text(cfg, "channel_selected_now").format(channel=selected)
@@ -2105,13 +2196,20 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         removed = channels[idx]
         channels.pop(idx)
         cfg["channels"] = channels
-        cfg["channel"] = channels[0] if channels else None
-        save_client(user_id, cfg)
         active_idx = context.user_data.get("active_channel_idx")
         if not channels:
             context.user_data.pop("active_channel_idx", None)
+            cfg["channel"] = None
         elif isinstance(active_idx, int) and active_idx >= len(channels):
             context.user_data["active_channel_idx"] = 0
+
+        if channels:
+            new_idx = context.user_data.get("active_channel_idx")
+            if not isinstance(new_idx, int) or new_idx < 0 or new_idx >= len(channels):
+                new_idx = 0
+                context.user_data["active_channel_idx"] = 0
+            switch_active_channel(cfg, channels[new_idx])
+        save_client(user_id, cfg)
         text = (
             ui_text(cfg, "channel_deleted_named").format(channel=removed)
             + "\n\n"
@@ -2276,7 +2374,7 @@ async def setchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         existing_idx = len(channels) - 1
 
     cfg["channels"] = channels
-    cfg["channel"] = channel
+    switch_active_channel(cfg, channel)
     save_client(user_id, cfg)
     context.user_data["active_channel_idx"] = existing_idx
     await update.message.reply_text(f"✅ Channel saved: {channel}")
@@ -2286,6 +2384,7 @@ async def unsetchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     cfg = load_client(user_id)
     cfg["channel"] = None
     cfg["channels"] = []
+    cfg["channel_settings"] = {}
     save_client(user_id, cfg)
     context.user_data.pop("active_channel_idx", None)
     await send_menu(update, cfg, "✅ Channel cleared.")
@@ -2396,10 +2495,13 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     awaiting_prompt_mode = context.user_data.get("awaiting_prompt_mode")
     if awaiting_prompt_mode:
+        awaiting_prompt_channel = (context.user_data.pop("awaiting_prompt_channel", None) or "").strip()
         context.user_data.pop("awaiting_prompt_mode", None)
         if text.lower() == "cancel":
             await send_prompt_parent_menu(update, cfg, awaiting_prompt_mode, ui_text(cfg, "prompt_edit_cancelled"))
             return
+        if awaiting_prompt_channel:
+            switch_active_channel(cfg, awaiting_prompt_channel)
         prompt_key = "creative_prompt" if awaiting_prompt_mode == "creative" else "rss_prompt"
         cfg[prompt_key] = text
         save_client(user_id, cfg)
