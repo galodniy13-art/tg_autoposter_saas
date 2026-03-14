@@ -11,7 +11,7 @@ _MODE_LABELS = {
     },
     "ru": {
         "rss": "📰 Режим: RSS",
-        "creator": "✍️ Режим: Creator",
+        "creator": "✍️ Режим: Creative",
         "both": "🧩 Режим: Оба",
         "set": "✅ Режим установлен: {mode}",
     },
