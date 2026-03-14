@@ -939,12 +939,33 @@ def llm_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: s
         return openai_compat_generate_post(user_id, cfg, title, summary, link)
     return ollama_generate_post(user_id, cfg, title, summary, link)
 
+
+def detect_builder_requested_language(requested_language_raw: str) -> str:
+    normalized = re.sub(r"\s+", " ", (requested_language_raw or "").strip().lower())
+    ru_exact = {"ru", "russian", "рус", "русский", "на русском", "russian language"}
+    en_exact = {"en", "english", "англ", "английский", "на английском", "english language"}
+
+    if normalized in ru_exact or normalized.endswith(":ru"):
+        return "Russian"
+    if normalized in en_exact or normalized.endswith(":en"):
+        return "English"
+
+    tokens = set(re.findall(r"[a-zа-яё]+", normalized))
+    ru_tokens = {"ru", "russian", "рус", "русский"}
+    en_tokens = {"en", "english", "англ", "английский"}
+    has_ru = bool(tokens & ru_tokens)
+    has_en = bool(tokens & en_tokens)
+
+    if has_ru and not has_en:
+        return "Russian"
+    if has_en and not has_ru:
+        return "English"
+
+    return "English"
+
+
 def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
-    requested_language_raw = (answers.get("q8", "") or "").strip().lower()
-    if any(token in requested_language_raw for token in ("ru", "рус", "russian", "русский")):
-        requested_language = "Russian"
-    else:
-        requested_language = "English"
+    requested_language = detect_builder_requested_language(answers.get("q8", ""))
 
     if mode == "creative":
         user_content = (
