@@ -940,6 +940,12 @@ def llm_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: s
     return ollama_generate_post(user_id, cfg, title, summary, link)
 
 def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
+    requested_language_raw = (answers.get("q8", "") or "").strip().lower()
+    if any(token in requested_language_raw for token in ("ru", "рус", "russian", "русский")):
+        requested_language = "Russian"
+    else:
+        requested_language = "English"
+
     if mode == "creative":
         user_content = (
             "Create a clean, practical system prompt for generating original Telegram posts.\n"
@@ -949,7 +955,8 @@ def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
             f"Preferred post types: {answers.get('q4', '')}\n"
             f"Typical length: {answers.get('q5', '')}\n"
             f"Avoid: {answers.get('q6', '')}\n"
-            f"CTA preference: {answers.get('q7', '')}\n\n"
+            f"CTA preference: {answers.get('q7', '')}\n"
+            f"Output language: {requested_language}\n\n"
             "Return only the final prompt text. Keep it concise and Telegram-oriented."
         )
     else:
@@ -961,7 +968,8 @@ def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
             f"Typical length: {answers.get('q4', '')}\n"
             f"Style preference (neutral vs stronger angle): {answers.get('q5', '')}\n"
             f"CTA preference: {answers.get('q6', '')}\n"
-            f"Avoid: {answers.get('q7', '')}\n\n"
+            f"Avoid: {answers.get('q7', '')}\n"
+            f"Output language: {requested_language}\n\n"
             "Return only the final prompt text. Keep it concise and Telegram-oriented."
         )
 
@@ -984,7 +992,8 @@ def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
         r = requests.post(url, headers=headers, json=payload, timeout=60)
         r.raise_for_status()
         data = r.json()
-        return clean_text(data["choices"][0]["message"]["content"])[:2000]
+        generated = clean_text(data["choices"][0]["message"]["content"])[:2000]
+        return f"Output language: {requested_language}.\n{generated}"[:2000]
 
     payload = {
         "model": OLLAMA_MODEL,
@@ -994,12 +1003,13 @@ def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
     r = requests.post(OLLAMA_URL, json=payload, timeout=60)
     r.raise_for_status()
     data = r.json()
-    return clean_text(data.get("response", ""))[:2000]
+    generated = clean_text(data.get("response", ""))[:2000]
+    return f"Output language: {requested_language}.\n{generated}"[:2000]
 
 
 def prompt_builder_questions(cfg: dict, mode: str) -> list[str]:
     prefix = "prompt_builder_q_creative_" if mode == "creative" else "prompt_builder_q_rss_"
-    return [ui_text(cfg, prefix + str(i)) for i in range(1, 8)]
+    return [ui_text(cfg, prefix + str(i)) for i in range(1, 9)]
 
 
 def build_prompt_builder_review(cfg: dict, mode: str) -> InlineKeyboardMarkup:
