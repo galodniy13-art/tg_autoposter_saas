@@ -5,14 +5,15 @@ TEXTS = {
         "mode_usage": "Usage: /mode rss OR /mode creator OR /mode both",
         "payment_offer":
             "💳 Access pricing (EUR/month):\n\n"
-            "RSS mode:\n"
+            "RSS mode (account-wide daily limit shared across all your channels):\n"
             "• 10 posts/day — €9/month\n"
             "• 20 posts/day — €15/month\n"
             "• 30 posts/day — €21/month\n\n"
-            "Creative mode:\n"
+            "Creative mode (account-wide daily limit shared across all your channels):\n"
             "• 5 posts/day — €7/month\n"
             "• 10 posts/day — €12/month\n"
             "• 20 posts/day — €20/month\n\n"
+            "Channel slots are purchased separately (how many channels you can connect).\n"
             "You can combine RSS + Creative access.\n"
             "To activate, message: @a_karaglan, @a_karaglanov",
         "btn_modes": "🧠 Modes",
@@ -24,15 +25,19 @@ TEXTS = {
         "rss_locked": "🔒 RSS + AI mode is unavailable for your account.",
         "creative_paywall":
             "Creative mode pricing (EUR/month):\n"
+            "(Account-wide daily limit shared across all connected channels)\n"
             "• 5/day — €7/month\n"
             "• 10/day — €12/month\n"
             "• 20/day — €20/month\n\n"
+            "Channel slots are managed separately.\n"
             "To activate, message: @a_karaglan, @a_karaglanov",
         "rss_paywall":
             "RSS mode pricing (EUR/month):\n"
+            "(Account-wide daily limit shared across all connected channels)\n"
             "• 10/day — €9/month\n"
             "• 20/day — €15/month\n"
             "• 30/day — €21/month\n\n"
+            "Channel slots are managed separately.\n"
             "To activate, message: @a_karaglan, @a_karaglanov",
         "mode_set_rss": "✅ Mode set: 📰 RSS + AI",
         "mode_set_creator": "✅ Mode set: ✨ Creative",
@@ -232,14 +237,15 @@ TEXTS = {
         "mode_usage": "Использование: /mode rss ИЛИ /mode creator ИЛИ /mode both",
         "payment_offer":
             "💳 Стоимость доступа (EUR/месяц):\n\n"
-            "RSS-режим:\n"
+            "RSS-режим (дневной лимит на аккаунт, общий для всех каналов):\n"
             "• 10 постов/день — €9/месяц\n"
             "• 20 постов/день — €15/месяц\n"
             "• 30 постов/день — €21/месяц\n\n"
-            "Creative-режим:\n"
+            "Creative-режим (дневной лимит на аккаунт, общий для всех каналов):\n"
             "• 5 постов/день — €7/месяц\n"
             "• 10 постов/день — €12/месяц\n"
             "• 20 постов/день — €20/месяц\n\n"
+            "Слоты каналов покупаются отдельно (сколько каналов можно подключить).\n"
             "Можно комбинировать RSS + Creative доступ.\n"
             "Для активации напишите: @a_karaglan, @a_karaglanov",
         "btn_modes": "🧠 Режимы",
@@ -251,15 +257,19 @@ TEXTS = {
         "rss_locked": "🔒 Режим RSS + AI недоступен для вашего аккаунта.",
         "creative_paywall":
             "Стоимость Creative-режима (EUR/месяц):\n"
+            "(Дневной лимит на аккаунт, общий для всех подключённых каналов)\n"
             "• 5/день — €7/месяц\n"
             "• 10/день — €12/месяц\n"
             "• 20/день — €20/месяц\n\n"
+            "Слоты каналов управляются отдельно.\n"
             "Для активации напишите: @a_karaglan, @a_karaglanov",
         "rss_paywall":
             "Стоимость RSS-режима (EUR/месяц):\n"
+            "(Дневной лимит на аккаунт, общий для всех подключённых каналов)\n"
             "• 10/день — €9/месяц\n"
             "• 20/день — €15/месяц\n"
             "• 30/день — €21/месяц\n\n"
+            "Слоты каналов управляются отдельно.\n"
             "Для активации напишите: @a_karaglan, @a_karaglanov",
         "mode_set_rss": "✅ Режим установлен: 📰 RSS + AI",
         "mode_set_creator": "✅ Режим установлен: ✨ Creative",

@@ -458,7 +458,7 @@ def normalize_channels(cfg: dict) -> list[str]:
 
 # ===================== Utility =====================
 def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+    return user_id in ADMIN_IDS or user_id in OWNER_TELEGRAM_IDS
 
 def clean_text(s: str) -> str:
     if not s:
@@ -493,13 +493,31 @@ def ensure_daily_counter(cfg: dict) -> dict:
         cfg["daily_count"] = 0
     return cfg
 
-def can_post_more(cfg: dict, mode: str) -> bool:
-    cfg = ensure_daily_counter(cfg)
-    return int(cfg.get("daily_count", 0)) < mode_limit(cfg, mode)
+def _mode_daily_keys(mode: str) -> tuple[str, str]:
+    if mode == "creator":
+        return "creative_daily_date", "creative_daily_count"
+    return "rss_daily_date", "rss_daily_count"
 
-def bump_daily_count(cfg: dict) -> None:
-    cfg = ensure_daily_counter(cfg)
-    cfg["daily_count"] = int(cfg.get("daily_count", 0)) + 1
+def ensure_mode_daily_counter(cfg: dict, mode: str) -> dict:
+    today = str(date.today())
+    date_key, count_key = _mode_daily_keys(mode)
+    if cfg.get(date_key) != today:
+        cfg[date_key] = today
+        cfg[count_key] = 0
+    return cfg
+
+def can_post_more(cfg: dict, mode: str) -> bool:
+    cfg = ensure_mode_daily_counter(cfg, mode)
+    _, count_key = _mode_daily_keys(mode)
+    return int(cfg.get(count_key, 0) or 0) < mode_limit(cfg, mode)
+
+def bump_daily_count(cfg: dict, mode: str | None = None) -> None:
+    mode = (mode or cfg.get("mode") or "rss").strip().lower()
+    if mode not in ("rss", "creator"):
+        mode = "rss"
+    cfg = ensure_mode_daily_counter(cfg, mode)
+    _, count_key = _mode_daily_keys(mode)
+    cfg[count_key] = int(cfg.get(count_key, 0) or 0) + 1
 
 def subscription_ok(cfg: dict) -> bool:
     until = (cfg.get("subscription_until") or "").strip()
@@ -2747,7 +2765,7 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if mode == "creator":
         msg = creator_make_post(user_id, cfg)
         await context.bot.send_message(chat_id=channel, text=msg)
-        bump_daily_count(cfg)
+        bump_daily_count(cfg, "creator")
         save_client(user_id, cfg)
         await reply_ui(update, "✅ Posted 1 creator post.", cfg, show_menu=True)
         return
@@ -2763,14 +2781,14 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             cfg.setdefault("posted_urls", [])
             cfg["posted_urls"].append(link)
             cfg["posted_urls"] = cfg["posted_urls"][-int(cfg.get("max_dedupe", 1500)):]
-            bump_daily_count(cfg)
+            bump_daily_count(cfg, "rss")
             save_client(user_id, cfg)
             await reply_ui(update, "✅ Posted 1 RSS item (both mode).", cfg, show_menu=True)
             return
 
         msg = creator_make_post(user_id, cfg)
         await context.bot.send_message(chat_id=channel, text=msg)
-        bump_daily_count(cfg)
+        bump_daily_count(cfg, "creator")
         save_client(user_id, cfg)
         await reply_ui(update, "✅ Posted 1 creator post (both mode fallback).", cfg, show_menu=True)
         return
@@ -2794,7 +2812,7 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     cfg.setdefault("posted_urls", [])
     cfg["posted_urls"].append(link)
     cfg["posted_urls"] = cfg["posted_urls"][-int(cfg.get("max_dedupe", 1500)):]
-    bump_daily_count(cfg)
+    bump_daily_count(cfg, "rss")
     save_client(user_id, cfg)
     await reply_ui(update, "✅ Posted 1 item.", cfg, show_menu=True)
 
@@ -3111,7 +3129,7 @@ async def autopost_loop(app: Application) -> None:
                         continue
                     msg = creator_make_post(user_id, cfg)
                     await app.bot.send_message(chat_id=channel, text=msg)
-                    bump_daily_count(cfg)
+                    bump_daily_count(cfg, "creator")
                     mark_mode_scheduled(cfg, "creative", now)
                     save_client(user_id, cfg)
                     last_post_at[user_id] = now
@@ -3124,7 +3142,7 @@ async def autopost_loop(app: Application) -> None:
                         continue
                     msg = creator_make_post(user_id, cfg)
                     await app.bot.send_message(chat_id=channel, text=msg)
-                    bump_daily_count(cfg)
+                    bump_daily_count(cfg, "creator")
                     mark_mode_scheduled(cfg, "creative", now)
                     save_client(user_id, cfg)
                     last_post_at[user_id] = now
@@ -3146,7 +3164,7 @@ async def autopost_loop(app: Application) -> None:
                 cfg.setdefault("posted_urls", [])
                 cfg["posted_urls"].append(link)
                 cfg["posted_urls"] = cfg["posted_urls"][-int(cfg.get("max_dedupe", 1500)):]
-                bump_daily_count(cfg)
+                bump_daily_count(cfg, "rss")
                 mark_mode_scheduled(cfg, "rss", now)
                 save_client(user_id, cfg)
                 last_post_at[user_id] = now
