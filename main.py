@@ -350,6 +350,7 @@ DEFAULT_CLIENT = {
     "creator_profile": "",
 
     "channel": None,
+    "channels": [],
     "channel_slots": 0,
     "feeds": [],
     "posted_urls": [],
@@ -420,10 +421,40 @@ def load_client(user_id: int) -> dict:
 
     for k, v in DEFAULT_CLIENT.items():
         cfg.setdefault(k, v)
+    normalize_channels(cfg)
     return cfg
 
 def save_client(user_id: int, cfg: dict) -> None:
+    normalize_channels(cfg)
     client_path(user_id).write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def normalize_channels(cfg: dict) -> list[str]:
+    raw_channels = cfg.get("channels")
+    if isinstance(raw_channels, str):
+        raw_channels = [raw_channels]
+    if not isinstance(raw_channels, list):
+        raw_channels = []
+
+    if cfg.get("channel"):
+        raw_channels = [cfg.get("channel")] + raw_channels
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw_channels:
+        if not isinstance(item, str):
+            continue
+        ch = item.strip()
+        if not ch:
+            continue
+        if ch in seen:
+            continue
+        seen.add(ch)
+        normalized.append(ch)
+
+    cfg["channels"] = normalized
+    cfg["channel"] = normalized[0] if normalized else None
+    return normalized
 
 # ===================== Utility =====================
 def is_admin(user_id: int) -> bool:
@@ -1222,7 +1253,7 @@ def build_feeds_delete_menu(cfg: dict) -> InlineKeyboardMarkup:
 
 
 def channels_overview(cfg: dict) -> str:
-    channels = [cfg.get("channel")] if cfg.get("channel") else []
+    channels = get_saved_channels(cfg)
     slots = int(cfg.get("channel_slots", 0) or 0)
     if not channels:
         return ui_text(cfg, "channels_empty_state").format(slots=slots)
@@ -1232,12 +1263,11 @@ def channels_overview(cfg: dict) -> str:
 
 
 def build_channel_delete_selection_menu(cfg: dict) -> InlineKeyboardMarkup:
-    channels = [cfg.get("channel")] if cfg.get("channel") else []
-    return build_channel_delete_menu(ui_pack(cfg), channels)
+    return build_channel_delete_menu(ui_pack(cfg), get_saved_channels(cfg))
 
 
 def get_saved_channels(cfg: dict) -> list[str]:
-    return [cfg.get("channel")] if cfg.get("channel") else []
+    return normalize_channels(cfg)
 
 
 def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, action: str) -> tuple[str | None, str | None]:
@@ -2006,7 +2036,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:setchannel":
-        channels = [cfg.get("channel")] if cfg.get("channel") else []
+        channels = get_saved_channels(cfg)
         slots = int(cfg.get("channel_slots", 0) or 0)
         if len(channels) >= slots:
             text = ui_text(cfg, "channel_slots_limit").format(count=len(channels), slots=slots)
@@ -2023,7 +2053,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:unsetchannel":
-        channels = [cfg.get("channel")] if cfg.get("channel") else []
+        channels = get_saved_channels(cfg)
         if not channels:
             text = ui_text(cfg, "channel_management_title") + "\n\n" + channels_overview(cfg)
             await q.answer()
@@ -2049,15 +2079,21 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.answer()
             return
 
-        channels = [cfg.get("channel")] if cfg.get("channel") else []
+        channels = get_saved_channels(cfg)
         if idx < 0 or idx >= len(channels):
             await q.answer()
             return
 
         removed = channels[idx]
-        cfg["channel"] = None
+        channels.pop(idx)
+        cfg["channels"] = channels
+        cfg["channel"] = channels[0] if channels else None
         save_client(user_id, cfg)
-        context.user_data.pop("active_channel_idx", None)
+        active_idx = context.user_data.get("active_channel_idx")
+        if not channels:
+            context.user_data.pop("active_channel_idx", None)
+        elif isinstance(active_idx, int) and active_idx >= len(channels):
+            context.user_data["active_channel_idx"] = 0
         text = (
             ui_text(cfg, "channel_deleted_named").format(channel=removed)
             + "\n\n"
@@ -2180,11 +2216,7 @@ async def setchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = update.effective_user.id
     cfg = load_client(user_id)
 
-    channels = [cfg.get("channel")] if cfg.get("channel") else []
-    slots = int(cfg.get("channel_slots", 0) or 0)
-    if len(channels) >= slots:
-        await send_menu(update, cfg, ui_text(cfg, "channel_slots_limit").format(count=len(channels), slots=slots))
-        return
+    channels = get_saved_channels(cfg)
 
     if not context.args:
         await update.message.reply_text("Usage: /setchannel @channelusername")
@@ -2193,6 +2225,11 @@ async def setchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     channel = context.args[0].strip()
     if not channel.startswith("@"):
         await update.message.reply_text("Channel should look like @channelusername")
+        return
+
+    slots = int(cfg.get("channel_slots", 0) or 0)
+    if channel not in channels and len(channels) >= slots:
+        await send_menu(update, cfg, ui_text(cfg, "channel_slots_limit").format(count=len(channels), slots=slots))
         return
 
     bot = context.bot
@@ -2215,15 +2252,22 @@ async def setchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
+    existing_idx = channels.index(channel) if channel in channels else -1
+    if existing_idx == -1:
+        channels.append(channel)
+        existing_idx = len(channels) - 1
+
+    cfg["channels"] = channels
     cfg["channel"] = channel
     save_client(user_id, cfg)
-    context.user_data["active_channel_idx"] = 0
+    context.user_data["active_channel_idx"] = existing_idx
     await update.message.reply_text(f"✅ Channel saved: {channel}")
 
 async def unsetchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
     cfg["channel"] = None
+    cfg["channels"] = []
     save_client(user_id, cfg)
     context.user_data.pop("active_channel_idx", None)
     await send_menu(update, cfg, "✅ Channel cleared.")
