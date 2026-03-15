@@ -437,14 +437,20 @@ def load_client(user_id: int) -> dict:
         save_client(user_id, cfg)
         return cfg
 
+    before_normalize = json.dumps(cfg, ensure_ascii=False, sort_keys=True)
     for k, v in DEFAULT_CLIENT.items():
         cfg.setdefault(k, v)
     normalize_channels(cfg)
     ensure_channel_settings(cfg)
     apply_active_channel_settings(cfg)
+    # Persist one-time upgrades so legacy client JSON files move to canonical schema.
+    if json.dumps(cfg, ensure_ascii=False, sort_keys=True) != before_normalize:
+        save_client(user_id, cfg)
     return cfg
 
 def save_client(user_id: int, cfg: dict) -> None:
+    for k, v in DEFAULT_CLIENT.items():
+        cfg.setdefault(k, v)
     normalize_channels(cfg)
     ensure_channel_settings(cfg)
     persist_active_channel_settings(cfg)
