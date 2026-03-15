@@ -1687,8 +1687,6 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:mode:creative:menu":
         if not await enforce_mode_paywall(update, cfg, "creator"):
             return
-        if not consume_channel_selection_origin(context, "creative_menu"):
-            clear_mode_channel_selection(context)
         selected, state = require_channel_context(cfg, context, "creative_menu")
         if state == "empty":
             await q.answer()
@@ -1826,8 +1824,6 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:mode:rss:menu":
         if not await enforce_mode_paywall(update, cfg, "rss"):
             return
-        if not consume_channel_selection_origin(context, "rss_menu"):
-            clear_mode_channel_selection(context)
         selected, state = require_channel_context(cfg, context, "rss_menu")
         if state == "empty":
             await q.answer()
@@ -1876,8 +1872,6 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         mode = "creative" if data.endswith("creative:menu") else "rss"
         action = "schedule_creative_menu" if mode == "creative" else "schedule_rss_menu"
-        if not consume_channel_selection_origin(context, action):
-            clear_mode_channel_selection(context)
         selected, state = require_channel_context(cfg, context, action)
         if state == "empty":
             await q.answer()
