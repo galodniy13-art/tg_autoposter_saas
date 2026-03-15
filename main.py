@@ -1670,9 +1670,9 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         clear_mode_channel_selection(context)
         await q.answer()
         try:
-            await q.edit_message_text(text=ui_text(cfg, "scheduling_menu_title"), reply_markup=build_scheduling_submenu(cfg))
+            await q.edit_message_text(text=ui_text(cfg, "modes_menu_title"), reply_markup=build_modes_submenu(cfg))
         except BadRequest:
-            await q.message.reply_text(text=ui_text(cfg, "scheduling_menu_title"), reply_markup=build_scheduling_submenu(cfg))
+            await q.message.reply_text(text=ui_text(cfg, "modes_menu_title"), reply_markup=build_modes_submenu(cfg))
         return
 
     if data == "ui:modes":
@@ -1887,7 +1887,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.answer()
             await q.message.reply_text(
                 ui_text(cfg, "channel_picker_title"),
-                reply_markup=build_channel_picker(cfg, action, "ui:setup:scheduling"),
+                reply_markup=build_channel_picker(cfg, action, f"ui:mode:{mode}:menu"),
             )
             return
         await q.answer()
