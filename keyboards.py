@@ -33,7 +33,6 @@ def build_setup_submenu(labels: dict, autopost_enabled: bool | None = None) -> I
         [
             [InlineKeyboardButton(labels["btn_channel_management"], callback_data="ui:setup:channels")],
             [InlineKeyboardButton(labels["btn_modes"], callback_data="ui:modes")],
-            [InlineKeyboardButton(labels["btn_scheduling"], callback_data="ui:setup:scheduling")],
             [InlineKeyboardButton(labels["btn_back_main"], callback_data="ui:backmain")],
         ]
     )
@@ -80,8 +79,9 @@ def build_creative_menu(labels: dict) -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(labels["btn_edit_prompt"], callback_data="ui:creative:editprompt")],
             [InlineKeyboardButton(labels["btn_build_prompt_ai"], callback_data="ui:creative:buildprompt")],
-            [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:creative:preview")],
             [InlineKeyboardButton(labels["btn_content_variety"], callback_data="ui:creative:variety")],
+            [InlineKeyboardButton(labels["btn_scheduling"], callback_data="ui:schedule:creative:menu")],
+            [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:creative:preview")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:modes")],
         ]
     )
@@ -126,6 +126,7 @@ def build_rss_ai_menu(labels: dict) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(labels["btn_build_prompt_ai"], callback_data="ui:rss:buildprompt")],
             [InlineKeyboardButton(labels["btn_edit_feeds"], callback_data="ui:rss:feeds")],
             [InlineKeyboardButton(labels["btn_rss_output_settings"], callback_data="ui:rss:output")],
+            [InlineKeyboardButton(labels["btn_scheduling"], callback_data="ui:schedule:rss:menu")],
             [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:rss:preview")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:modes")],
         ]
@@ -173,7 +174,7 @@ def build_mode_schedule_menu(labels: dict, mode: str, enabled: bool, use_interva
             [InlineKeyboardButton(labels["btn_schedule_edit"], callback_data=f"ui:schedule:{mode}:edit")],
             [InlineKeyboardButton(labels["btn_schedule_edit_interval"], callback_data=f"ui:schedule:{mode}:interval")],
             [InlineKeyboardButton(toggle_label, callback_data=f"ui:schedule:{mode}:toggle")],
-            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:setup:scheduling")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data=f"ui:mode:{mode}:menu")],
         ]
     )
 
