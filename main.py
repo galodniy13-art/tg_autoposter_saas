@@ -356,6 +356,8 @@ DEFAULT_CLIENT = {
     "posted_urls": [],
     "include_rss_source_link": True,
     "use_rss_feed_image": True,
+    "rss_cta_enabled": False,
+    "rss_cta_text": "",
 
     "autopost_enabled": False,
     "interval_minutes": 30,
@@ -398,6 +400,8 @@ CHANNEL_SCOPED_KEYS = (
     "posted_urls",
     "include_rss_source_link",
     "use_rss_feed_image",
+    "rss_cta_enabled",
+    "rss_cta_text",
     "rss_schedule_enabled",
     "rss_schedule_times",
     "rss_last_schedule_date",
@@ -876,9 +880,16 @@ def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int =
 
 
 def format_rss_message(cfg: dict, msg: str, link: str) -> str:
+    base_text = msg
     if bool(cfg.get("include_rss_source_link", True)):
-        return f"{msg}\n\n{link}"
-    return msg
+        base_text = f"{base_text}\n\n{link}"
+
+    if bool(cfg.get("rss_cta_enabled", False)):
+        cta_text = (cfg.get("rss_cta_text") or "").strip()
+        if cta_text:
+            base_text = f"{base_text}\n\n{cta_text}"
+
+    return base_text
 
 
 async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str, image_url: str | None) -> None:
@@ -991,7 +1002,7 @@ def detect_builder_requested_language(requested_language_raw: str) -> str:
 
 
 def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
-    requested_language = detect_builder_requested_language(answers.get("q8", ""))
+    requested_language = detect_builder_requested_language(answers.get("q7", ""))
 
     if mode == "creative":
         user_content = (
@@ -1002,11 +1013,10 @@ def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
             f"Preferred post types: {answers.get('q4', '')}\n"
             f"Typical length: {answers.get('q5', '')}\n"
             f"Avoid: {answers.get('q6', '')}\n"
-            f"CTA preference: {answers.get('q7', '')}\n"
             f"Output language: {requested_language}\n\n"
             "The generated prompt must: act as a Telegram content writer/editor; write naturally (not robotic); "
             "prioritize clarity/readability; follow tone, length, audience and language settings; avoid copying source-like phrasing too closely; "
-            "avoid fake facts; avoid source mentions/usernames/links unless enabled by output settings; keep CTA placement clean when CTA is requested; "
+            "avoid fake facts; avoid source mentions/usernames/links unless enabled by output settings; "
             "respect explicit formatting instructions (including empty lines).\n"
             "Keep it flexible and publication-ready, not a rigid one-size-fits-all template.\n"
             "Return only the final prompt text."
@@ -1019,12 +1029,11 @@ def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
             f"Tone/voice: {answers.get('q3', '')}\n"
             f"Typical length: {answers.get('q4', '')}\n"
             f"Style preference (neutral vs stronger angle): {answers.get('q5', '')}\n"
-            f"CTA preference: {answers.get('q6', '')}\n"
-            f"Avoid: {answers.get('q7', '')}\n"
+            f"Avoid: {answers.get('q6', '')}\n"
             f"Output language: {requested_language}\n\n"
             "The generated prompt must: act as a Telegram content writer/editor; rewrite naturally for Telegram; preserve important facts while avoiding inventions; "
             "follow tone, length, audience and language settings; avoid copying source text too closely; avoid raw metadata/source mentions/usernames/links unless enabled; "
-            "respect explicit formatting instructions (including empty lines) and keep CTA placement clean when CTA is requested.\n"
+            "respect explicit formatting instructions (including empty lines).\n"
             "Keep it flexible and publication-ready, not a rigid one-size-fits-all template.\n"
             "Return only the final prompt text."
         )
@@ -1072,7 +1081,7 @@ def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
 
 def prompt_builder_questions(cfg: dict, mode: str) -> list[str]:
     prefix = "prompt_builder_q_creative_" if mode == "creative" else "prompt_builder_q_rss_"
-    return [ui_text(cfg, prefix + str(i)) for i in range(1, 9)]
+    return [ui_text(cfg, prefix + str(i)) for i in range(1, 8)]
 
 
 def build_prompt_builder_review(cfg: dict, mode: str) -> InlineKeyboardMarkup:
@@ -1235,6 +1244,7 @@ def build_rss_output_submenu(cfg: dict) -> InlineKeyboardMarkup:
         ui_pack(cfg),
         bool(cfg.get("include_rss_source_link", True)),
         bool(cfg.get("use_rss_feed_image", True)),
+        bool(cfg.get("rss_cta_enabled", False)),
     )
 
 
@@ -2081,6 +2091,25 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.message.reply_text(text=text, reply_markup=build_rss_output_submenu(cfg))
         return
 
+    if data == "ui:rss:toggle_cta":
+        enabled = not bool(cfg.get("rss_cta_enabled", False))
+        cfg["rss_cta_enabled"] = enabled
+        if enabled:
+            context.user_data["awaiting_rss_cta_text"] = True
+            save_client(user_id, cfg)
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "rss_cta_prompt"))
+            return
+        context.user_data.pop("awaiting_rss_cta_text", None)
+        save_client(user_id, cfg)
+        await q.answer()
+        text = ui_text(cfg, "rss_output_settings_title")
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_rss_output_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_rss_output_submenu(cfg))
+        return
+
     if data == "ui:rss:feeds":
         selected, state = require_channel_context(cfg, context, "rss_feeds")
         if state == "empty":
@@ -2667,6 +2696,16 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         cfg[prompt_key] = text
         save_client(user_id, cfg)
         await send_prompt_parent_menu(update, cfg, awaiting_prompt_mode, ui_text(cfg, "prompt_edit_saved"))
+        return
+
+    if context.user_data.get("awaiting_rss_cta_text"):
+        context.user_data.pop("awaiting_rss_cta_text", None)
+        cfg["rss_cta_text"] = text
+        save_client(user_id, cfg)
+        await update.message.reply_text(
+            ui_text(cfg, "rss_cta_saved") + "\n\n" + ui_text(cfg, "rss_output_settings_title"),
+            reply_markup=build_rss_output_submenu(cfg),
+        )
         return
 
     prompt_builder = context.user_data.get("prompt_builder")
