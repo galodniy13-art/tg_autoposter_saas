@@ -99,15 +99,15 @@ if _raw_admins:
 # LLM provider:
 # - ollama (local)
 # - openai_compat (DeepSeek / OpenRouter / any OpenAI-compatible)
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai_compat").strip().lower()
 
 # Ollama settings
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/generate").strip()
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct").strip()
 
-# OpenAI-compatible settings (DeepSeek later):
+# OpenAI-compatible settings (DeepSeek):
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com/v1").strip()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-chat").strip()
 
 DEFAULT_STYLE_FILE = "default_ru.txt"
@@ -993,7 +993,7 @@ def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link
 
 def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str) -> str:
     if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY missing (set it in host variables)")
+        raise RuntimeError("DEEPSEEK_API_KEY missing (set it in host variables)")
 
     style_prompt = get_mode_prompt(user_id, cfg, "rss")
     title = clean_text(title)
