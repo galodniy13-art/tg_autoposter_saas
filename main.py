@@ -1134,6 +1134,60 @@ def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
     return f"Output language: {requested_language}.\n{generated}"[:2000]
 
 
+def llm_generate_style_prompt_from_examples(mode: str, examples: list[str], requested_language: str) -> str:
+    cleaned = [clean_text(x) for x in examples if clean_text(x)]
+    snippets = "\n\n".join([f"Example {i + 1}:\n{txt}" for i, txt in enumerate(cleaned[:3])])
+    mode_context = "rewriting RSS/news into Telegram posts" if mode == "rss" else "writing original Telegram posts"
+    user_content = (
+        f"Analyze the writing style from these 3 example Telegram posts and create one reusable SYSTEM prompt for {mode_context}.\n"
+        "Capture tone, energy, sentence rhythm, structure, hooks and endings, and detail level.\n"
+        "Do not copy or quote the examples directly.\n"
+        "Create practical instructions the model can follow in future posts.\n"
+        "Preserve clarity and factual accuracy; do not invent facts.\n"
+        f"Output language: {requested_language}.\n\n"
+        f"{snippets}\n\n"
+        "Return only the final prompt text."
+    )
+    system_content = (
+        "You are an expert prompt engineer for Telegram content automation. "
+        "Build one concise, practical style prompt based on the user's examples."
+    )
+
+    if LLM_PROVIDER == "openai_compat":
+        url = OPENAI_BASE_URL.rstrip("/") + "/chat/completions"
+        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+        payload = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": 0.7,
+        }
+        r = requests.post(url, headers=headers, json=payload, timeout=60)
+        r.raise_for_status()
+        data = r.json()
+        generated = (data["choices"][0]["message"]["content"] or "").replace("\r", "").strip()
+        generated = re.sub(r"(?is)^```[a-z0-9_\-]*\s*", "", generated).strip()
+        generated = re.sub(r"(?is)\s*```$", "", generated).strip()
+        generated = re.sub(r"\n{3,}", "\n\n", generated)[:2000]
+        return generated
+
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": system_content + "\n\n" + user_content,
+        "stream": False,
+    }
+    r = requests.post(OLLAMA_URL, json=payload, timeout=60)
+    r.raise_for_status()
+    data = r.json()
+    generated = (data.get("response", "") or "").replace("\r", "").strip()
+    generated = re.sub(r"(?is)^```[a-z0-9_\-]*\s*", "", generated).strip()
+    generated = re.sub(r"(?is)\s*```$", "", generated).strip()
+    generated = re.sub(r"\n{3,}", "\n\n", generated)[:2000]
+    return generated
+
+
 def prompt_builder_questions(cfg: dict, mode: str) -> list[str]:
     prefix = "prompt_builder_q_creative_" if mode == "creative" else "prompt_builder_q_rss_"
     return [ui_text(cfg, prefix + str(i)) for i in range(1, 8)]
@@ -1154,6 +1208,7 @@ def clear_prompt_interaction_state(
         context.user_data.pop("awaiting_prompt_channel", None)
     if clear_builder:
         context.user_data.pop("prompt_builder", None)
+    context.user_data.pop("copy_style", None)
 
 
 # ===================== Creator mode (text-only) =====================
@@ -1553,11 +1608,13 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
         "creative_menu",
         "creative_editprompt",
         "creative_buildprompt",
+        "creative_copystyle",
         "creative_variety",
         "creative_preview",
         "rss_menu",
         "rss_editprompt",
         "rss_buildprompt",
+        "rss_copystyle",
         "rss_feeds",
         "rss_output",
         "rss_preview",
@@ -1722,6 +1779,9 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             q.data = mapped
         elif action in ("creative_buildprompt", "rss_buildprompt"):
             mapped = "ui:creative:buildprompt" if action == "creative_buildprompt" else "ui:rss:buildprompt"
+            q.data = mapped
+        elif action in ("creative_copystyle", "rss_copystyle"):
+            mapped = "ui:creative:copystyle" if action == "creative_copystyle" else "ui:rss:copystyle"
             q.data = mapped
         elif action == "creative_variety":
             q.data = "ui:creative:variety"
@@ -2328,6 +2388,56 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
 
+    if data == "ui:creative:copystyle":
+        if not await enforce_mode_paywall(update, cfg, "creator"):
+            return
+        selected, state = require_channel_context(cfg, context, "creative_copystyle")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_copystyle", "ui:mode:creative:menu"),
+            )
+            return
+        clear_prompt_interaction_state(context, clear_manual=True, clear_builder=True)
+        context.user_data["copy_style"] = {"mode": "creative", "selected_channel": selected, "examples": []}
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            + "\n\n"
+            + ui_text(cfg, "copy_style_intro")
+        )
+        return
+
+    if data == "ui:rss:copystyle":
+        if not await enforce_mode_paywall(update, cfg, "rss"):
+            return
+        selected, state = require_channel_context(cfg, context, "rss_copystyle")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "rss_copystyle", "ui:mode:rss:menu"),
+            )
+            return
+        clear_prompt_interaction_state(context, clear_manual=True, clear_builder=True)
+        context.user_data["copy_style"] = {"mode": "rss", "selected_channel": selected, "examples": []}
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            + "\n\n"
+            + ui_text(cfg, "copy_style_intro")
+        )
+        return
+
     if data == "ui:creative:editprompt":
         if not await enforce_mode_paywall(update, cfg, "creator"):
             return
@@ -2805,6 +2915,48 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(
             ui_text(cfg, "prompt_builder_review").format(prompt=generated),
             reply_markup=build_prompt_builder_review(cfg, mode),
+        )
+        return
+
+    copy_style = context.user_data.get("copy_style")
+    if copy_style:
+        example_text = (update.message.text or update.message.caption or "").strip()
+        if not example_text:
+            await update.message.reply_text(ui_text(cfg, "copy_style_invalid"))
+            return
+
+        examples = copy_style.get("examples") or []
+        examples.append(example_text)
+        copy_style["examples"] = examples
+
+        left = 3 - len(examples)
+        if left > 0:
+            context.user_data["copy_style"] = copy_style
+            await update.message.reply_text(ui_text(cfg, "copy_style_progress").format(left=left))
+            return
+
+        context.user_data.pop("copy_style", None)
+        mode = copy_style.get("mode") or "rss"
+        selected_channel = (copy_style.get("selected_channel") or "").strip()
+        if selected_channel:
+            switch_active_channel(cfg, selected_channel)
+
+        try:
+            requested_language = "Russian" if (cfg.get("language") or "en") == "ru" else "English"
+            generated = llm_generate_style_prompt_from_examples(mode, examples[:3], requested_language)
+        except Exception:
+            await update.message.reply_text(ui_text(cfg, "prompt_builder_error"))
+            return
+
+        prompt_key = "creative_prompt" if mode == "creative" else "rss_prompt"
+        cfg[prompt_key] = generated
+        save_client(user_id, cfg)
+
+        await update.message.reply_text(
+            ui_text(cfg, "copy_style_success")
+            + "\n\n"
+            + (ui_text(cfg, "creative_menu_title") if mode == "creative" else ui_text(cfg, "rss_menu_title")),
+            reply_markup=build_creative_submenu(cfg) if mode == "creative" else build_rss_submenu(cfg),
         )
         return
 
