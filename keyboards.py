@@ -79,6 +79,7 @@ def build_creative_menu(labels: dict) -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(labels["btn_edit_prompt"], callback_data="ui:creative:editprompt")],
             [InlineKeyboardButton(labels["btn_build_prompt_ai"], callback_data="ui:creative:buildprompt")],
+            [InlineKeyboardButton(labels["btn_copy_my_style"], callback_data="ui:creative:copystyle")],
             [InlineKeyboardButton(labels["btn_content_variety"], callback_data="ui:creative:variety")],
             [InlineKeyboardButton(labels["btn_scheduling"], callback_data="ui:schedule:creative:menu")],
             [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:creative:preview")],
@@ -124,6 +125,7 @@ def build_rss_ai_menu(labels: dict) -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(labels["btn_edit_prompt"], callback_data="ui:rss:editprompt")],
             [InlineKeyboardButton(labels["btn_build_prompt_ai"], callback_data="ui:rss:buildprompt")],
+            [InlineKeyboardButton(labels["btn_copy_my_style"], callback_data="ui:rss:copystyle")],
             [InlineKeyboardButton(labels["btn_edit_feeds"], callback_data="ui:rss:feeds")],
             [InlineKeyboardButton(labels["btn_rss_output_settings"], callback_data="ui:rss:output")],
             [InlineKeyboardButton(labels["btn_scheduling"], callback_data="ui:schedule:rss:menu")],
