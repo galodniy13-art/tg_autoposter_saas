@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import re
 import threading
@@ -112,6 +113,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-chat").strip()
 DEFAULT_STYLE_FILE = "default_ru.txt"
 CREATIVE_POST_TYPES = ["educational", "opinion", "story", "checklist", "question", "myth_vs_fact", "mini_case"]
 CREATIVE_VARIATION_LEVELS = {"low", "balanced", "high"}
+logger = logging.getLogger(__name__)
 
 # ===================== Texts (EN/RU) =====================
 TEXTS = {
@@ -671,6 +673,7 @@ def sanitize_llm_post(text: str, cfg: dict, link: str) -> str:
     # trim common wrapper formatting
     t = re.sub(r"(?is)^```[a-z0-9_\-]*\s*", "", t).strip()
     t = re.sub(r"(?is)\s*```$", "", t).strip()
+    t = re.sub(r"\*\*(.+?)\*\*", r"\1", t)
     t = re.sub(r"\n{3,}", "\n\n", t).strip()
 
     include_source_link = bool(cfg.get("include_rss_source_link", True))
@@ -1138,9 +1141,17 @@ def llm_generate_style_prompt_from_examples(mode: str, examples: list[str], requ
     cleaned = [clean_text(x) for x in examples if clean_text(x)]
     snippets = "\n\n".join([f"Example {i + 1}:\n{txt}" for i, txt in enumerate(cleaned[:3])])
     mode_context = "rewriting RSS/news into Telegram posts" if mode == "rss" else "writing original Telegram posts"
+    mode_output = "rewrite source content into the user's style" if mode == "rss" else "write original posts in the user's style"
     user_content = (
         f"Analyze the writing style from these 3 example Telegram posts and create one reusable SYSTEM prompt for {mode_context}.\n"
-        "Capture tone, energy, sentence rhythm, structure, hooks and endings, and detail level.\n"
+        "Capture tone, energy, sentence rhythm, structure, hooks/endings, and detail level.\n"
+        "The final SYSTEM prompt must include practical control rules:\n"
+        "- Write for Telegram and keep formatting clean/publication-ready.\n"
+        "- Keep clarity/readability high.\n"
+        f"- {mode_output}; rewrite naturally, not mechanically.\n"
+        "- Use only provided source facts when source material exists; do not invent facts.\n"
+        f"- Always produce the final post in {requested_language}, even if the source language is different.\n"
+        "- Avoid source metadata, usernames, and links unless output settings require links.\n"
         "Do not copy or quote the examples directly.\n"
         "Create practical instructions the model can follow in future posts.\n"
         "Preserve clarity and factual accuracy; do not invent facts.\n"
@@ -1171,7 +1182,7 @@ def llm_generate_style_prompt_from_examples(mode: str, examples: list[str], requ
         generated = re.sub(r"(?is)^```[a-z0-9_\-]*\s*", "", generated).strip()
         generated = re.sub(r"(?is)\s*```$", "", generated).strip()
         generated = re.sub(r"\n{3,}", "\n\n", generated)[:2000]
-        return generated
+        return f"Output language: {requested_language}.\n{generated}"[:2000]
 
     payload = {
         "model": OLLAMA_MODEL,
@@ -1185,7 +1196,7 @@ def llm_generate_style_prompt_from_examples(mode: str, examples: list[str], requ
     generated = re.sub(r"(?is)^```[a-z0-9_\-]*\s*", "", generated).strip()
     generated = re.sub(r"(?is)\s*```$", "", generated).strip()
     generated = re.sub(r"\n{3,}", "\n\n", generated)[:2000]
-    return generated
+    return f"Output language: {requested_language}.\n{generated}"[:2000]
 
 
 def prompt_builder_questions(cfg: dict, mode: str) -> list[str]:
@@ -3614,6 +3625,15 @@ async def setinterval_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TY
 # ===================== Autopost loop =====================
 async def autopost_loop(app: Application) -> None:
     last_post_at: dict[int, datetime] = {}
+    last_diag_at: dict[tuple[int, str], datetime] = {}
+
+    def should_log_diag(uid: int, reason: str, now: datetime, cooldown_minutes: int = 30) -> bool:
+        key = (uid, reason)
+        prev = last_diag_at.get(key)
+        if prev and now - prev < timedelta(minutes=cooldown_minutes):
+            return False
+        last_diag_at[key] = now
+        return True
 
     while True:
         try:
@@ -3657,6 +3677,8 @@ async def autopost_loop(app: Application) -> None:
                 best = pick_newest_unseen(cfg) if feeds else None
 
                 if mode == "both" and not best:
+                    if should_log_diag(user_id, "no_fresh_rss_items", now):
+                        logger.info("[autopost] user=%s mode=both: no fresh RSS items (none or already posted), fallback to creator", user_id)
                     if not should_run_mode_now(cfg, "creative", now, last_post_at, user_id):
                         continue
                     msg = creator_make_post(user_id, cfg)
@@ -3668,6 +3690,8 @@ async def autopost_loop(app: Application) -> None:
                     continue
 
                 if not best:
+                    if should_log_diag(user_id, "no_fresh_rss_items", now):
+                        logger.info("[autopost] user=%s mode=rss: no fresh RSS items (feed has no new entries or all were deduped)", user_id)
                     continue
 
                 if not should_run_mode_now(cfg, "rss", now, last_post_at, user_id):
@@ -3689,7 +3713,7 @@ async def autopost_loop(app: Application) -> None:
                 last_post_at[user_id] = now
 
         except Exception:
-            pass
+            logger.exception("[autopost] loop error")
 
         await asyncio.sleep(60)
 
