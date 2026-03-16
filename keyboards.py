@@ -86,6 +86,7 @@ def build_creative_menu(labels: dict) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(labels["btn_content_variety"], callback_data="ui:creative:variety"),
             ],
             [InlineKeyboardButton(labels["btn_scheduling"], callback_data="ui:schedule:creative:menu")],
+            [InlineKeyboardButton(labels["btn_post_format"], callback_data="ui:creative:output")],
             [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:creative:preview")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:modes")],
         ]
@@ -164,7 +165,31 @@ def build_rss_output_menu(labels: dict, include_source_link: bool, use_feed_imag
             [InlineKeyboardButton(source_label, callback_data="ui:rss:toggle_source_link")],
             [InlineKeyboardButton(image_label, callback_data="ui:rss:toggle_feed_image")],
             [InlineKeyboardButton(cta_label, callback_data="ui:rss:toggle_cta")],
+            [
+                InlineKeyboardButton(labels["btn_add_template_image"], callback_data="ui:rss:add_template_image"),
+                InlineKeyboardButton(labels["btn_delete_template_image"], callback_data="ui:rss:delete_template_image"),
+            ],
+            [
+                InlineKeyboardButton(labels["btn_add_watermark"], callback_data="ui:rss:add_watermark"),
+                InlineKeyboardButton(labels["btn_delete_watermark"], callback_data="ui:rss:delete_watermark"),
+            ],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:rss:menu")],
+        ]
+    )
+
+
+def build_creative_output_menu(labels: dict) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(labels["btn_add_template_image"], callback_data="ui:creative:add_template_image"),
+                InlineKeyboardButton(labels["btn_delete_template_image"], callback_data="ui:creative:delete_template_image"),
+            ],
+            [
+                InlineKeyboardButton(labels["btn_add_watermark"], callback_data="ui:creative:add_watermark"),
+                InlineKeyboardButton(labels["btn_delete_watermark"], callback_data="ui:creative:delete_watermark"),
+            ],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
         ]
     )
 

@@ -29,6 +29,7 @@ from keyboards import (
     build_creative_post_types_menu,
     build_rss_ai_menu,
     build_rss_output_menu,
+    build_creative_output_menu,
     build_feed_management_menu,
     build_feed_delete_menu,
     build_channel_delete_menu,
@@ -54,6 +55,7 @@ from telegram.ext import (
 BASE_DIR = Path(__file__).parent
 CLIENTS_DIR = BASE_DIR / "clients"
 STYLES_DIR = BASE_DIR / "styles"
+CLIENT_ASSETS_DIR = BASE_DIR / "client_assets"
 
 # local .env is used on your laptop; on Railway use Variables (env vars)
 load_dotenv(BASE_DIR / ".env")
@@ -361,6 +363,14 @@ DEFAULT_CLIENT = {
     "rss_cta_enabled": False,
     "rss_cta_text": "",
     "rss_cta_entities": [],
+    "rss_template_file_id": "",
+    "rss_template_image_path": "",
+    "rss_watermark_file_id": "",
+    "rss_watermark_image_path": "",
+    "creative_template_file_id": "",
+    "creative_template_image_path": "",
+    "creative_watermark_file_id": "",
+    "creative_watermark_image_path": "",
 
     "autopost_enabled": False,
     "interval_minutes": 30,
@@ -406,6 +416,14 @@ CHANNEL_SCOPED_KEYS = (
     "rss_cta_enabled",
     "rss_cta_text",
     "rss_cta_entities",
+    "rss_template_file_id",
+    "rss_template_image_path",
+    "rss_watermark_file_id",
+    "rss_watermark_image_path",
+    "creative_template_file_id",
+    "creative_template_image_path",
+    "creative_watermark_file_id",
+    "creative_watermark_image_path",
     "rss_schedule_enabled",
     "rss_schedule_times",
     "rss_last_schedule_date",
@@ -420,6 +438,7 @@ CHANNEL_SCOPED_KEYS = (
 def ensure_dirs() -> None:
     CLIENTS_DIR.mkdir(parents=True, exist_ok=True)
     STYLES_DIR.mkdir(parents=True, exist_ok=True)
+    CLIENT_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
 def client_path(user_id: int) -> Path:
     return CLIENTS_DIR / f"{user_id}.json"
@@ -1369,6 +1388,41 @@ def build_rss_output_submenu(cfg: dict) -> InlineKeyboardMarkup:
     )
 
 
+def build_creative_output_submenu(cfg: dict) -> InlineKeyboardMarkup:
+    return build_creative_output_menu(ui_pack(cfg))
+
+
+def post_format_assets_text(cfg: dict, mode: str) -> str:
+    template_key = f"{mode}_template_file_id"
+    watermark_key = f"{mode}_watermark_file_id"
+    template_status = ui_text(cfg, "status_added") if cfg.get(template_key) else ui_text(cfg, "status_not_added")
+    watermark_status = ui_text(cfg, "status_added") if cfg.get(watermark_key) else ui_text(cfg, "status_not_added")
+    return ui_text(cfg, "post_format_assets_info").format(template=template_status, watermark=watermark_status)
+
+
+def output_settings_text(cfg: dict, mode: str) -> str:
+    if mode == "rss":
+        return ui_text(cfg, "rss_output_settings_title") + "\n\n" + post_format_assets_text(cfg, mode)
+    return ui_text(cfg, "creative_output_settings_title") + "\n\n" + post_format_assets_text(cfg, mode)
+
+
+def asset_paths(user_id: int, mode: str, asset_type: str, ext: str) -> tuple[Path, str]:
+    safe_ext = ext if ext in ("jpg", "jpeg", "png", "webp") else "jpg"
+    rel = Path("client_assets") / str(user_id) / f"{mode}_{asset_type}.{safe_ext}"
+    return BASE_DIR / rel, rel.as_posix()
+
+
+def clear_asset_file(path_value: str) -> None:
+    if not path_value:
+        return
+    try:
+        path = BASE_DIR / path_value
+        if path.exists() and path.is_file():
+            path.unlink()
+    except Exception:
+        pass
+
+
 def build_feed_menu(cfg: dict) -> InlineKeyboardMarkup:
     return build_feed_management_menu(ui_pack(cfg))
 
@@ -1628,6 +1682,7 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
         "rss_copystyle",
         "rss_feeds",
         "rss_output",
+        "creative_output",
         "rss_preview",
         "schedule_rss_menu",
         "schedule_creative_menu",
@@ -1803,6 +1858,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             q.data = "ui:rss:feeds"
         elif action == "rss_output":
             q.data = "ui:rss:output"
+        elif action == "creative_output":
+            q.data = "ui:creative:output"
         elif action in ("schedule_rss_menu", "schedule_creative_menu"):
             mapped = "ui:schedule:rss:menu" if action == "schedule_rss_menu" else "ui:schedule:creative:menu"
             q.data = mapped
@@ -2191,7 +2248,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 reply_markup=build_channel_picker(cfg, "rss_output", "ui:mode:rss:menu"),
             )
             return
-        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + ui_text(cfg, "rss_output_settings_title")
+        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + output_settings_text(cfg, "rss")
         await q.answer()
         try:
             await q.edit_message_text(text=text, reply_markup=build_rss_output_submenu(cfg))
@@ -2203,7 +2260,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         cfg["include_rss_source_link"] = not bool(cfg.get("include_rss_source_link", True))
         save_client(user_id, cfg)
         await q.answer()
-        text = ui_text(cfg, "rss_output_settings_title")
+        text = output_settings_text(cfg, "rss")
         try:
             await q.edit_message_text(text=text, reply_markup=build_rss_output_submenu(cfg))
         except BadRequest:
@@ -2214,7 +2271,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         cfg["use_rss_feed_image"] = not bool(cfg.get("use_rss_feed_image", True))
         save_client(user_id, cfg)
         await q.answer()
-        text = ui_text(cfg, "rss_output_settings_title")
+        text = output_settings_text(cfg, "rss")
         try:
             await q.edit_message_text(text=text, reply_markup=build_rss_output_submenu(cfg))
         except BadRequest:
@@ -2233,11 +2290,99 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data.pop("awaiting_rss_cta_text", None)
         save_client(user_id, cfg)
         await q.answer()
-        text = ui_text(cfg, "rss_output_settings_title")
+        text = output_settings_text(cfg, "rss")
         try:
             await q.edit_message_text(text=text, reply_markup=build_rss_output_submenu(cfg))
         except BadRequest:
             await q.message.reply_text(text=text, reply_markup=build_rss_output_submenu(cfg))
+        return
+
+    if data == "ui:creative:output":
+        selected, state = require_channel_context(cfg, context, "creative_output")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_output", "ui:mode:creative:menu"),
+            )
+            return
+        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + output_settings_text(cfg, "creative")
+        await q.answer()
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_creative_output_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_creative_output_submenu(cfg))
+        return
+
+    if data in (
+        "ui:rss:add_template_image",
+        "ui:rss:add_watermark",
+        "ui:creative:add_template_image",
+        "ui:creative:add_watermark",
+    ):
+        mode = "creative" if data.startswith("ui:creative") else "rss"
+        asset_type = "watermark" if data.endswith("watermark") else "template"
+        action = "creative_output" if mode == "creative" else "rss_output"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, action, f"ui:mode:{mode}:menu"),
+            )
+            return
+        context.user_data["awaiting_asset_upload"] = {"mode": mode, "asset": asset_type, "channel": selected}
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            + "\n\n"
+            + (ui_text(cfg, "asset_prompt_send_watermark") if asset_type == "watermark" else ui_text(cfg, "asset_prompt_send_template"))
+        )
+        return
+
+    if data in (
+        "ui:rss:delete_template_image",
+        "ui:rss:delete_watermark",
+        "ui:creative:delete_template_image",
+        "ui:creative:delete_watermark",
+    ):
+        mode = "creative" if data.startswith("ui:creative") else "rss"
+        asset_type = "watermark" if data.endswith("watermark") else "template"
+        action = "creative_output" if mode == "creative" else "rss_output"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, action, f"ui:mode:{mode}:menu"),
+            )
+            return
+        path_key = f"{mode}_{asset_type}_image_path"
+        file_key = f"{mode}_{asset_type}_file_id"
+        clear_asset_file(str(cfg.get(path_key) or ""))
+        cfg[path_key] = ""
+        cfg[file_key] = ""
+        save_client(user_id, cfg)
+        await q.answer()
+        notice = ui_text(cfg, "asset_deleted_watermark") if asset_type == "watermark" else ui_text(cfg, "asset_deleted_template")
+        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + notice + "\n\n" + output_settings_text(cfg, mode)
+        submenu = build_creative_output_submenu(cfg) if mode == "creative" else build_rss_output_submenu(cfg)
+        try:
+            await q.edit_message_text(text=text, reply_markup=submenu)
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=submenu)
         return
 
     if data == "ui:rss:feeds":
@@ -2859,6 +3004,56 @@ async def stylewizard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
+
+    awaiting_asset_upload = context.user_data.get("awaiting_asset_upload")
+    if awaiting_asset_upload:
+        mode = (awaiting_asset_upload.get("mode") or "rss").strip()
+        asset_type = (awaiting_asset_upload.get("asset") or "template").strip()
+        selected_channel = (awaiting_asset_upload.get("channel") or "").strip()
+        if selected_channel:
+            switch_active_channel(cfg, selected_channel)
+
+        photo = update.message.photo[-1] if update.message.photo else None
+        document = update.message.document
+        telegram_file = None
+        ext = "jpg"
+
+        if photo:
+            telegram_file = photo
+            ext = "jpg"
+        elif document and (document.mime_type or "").startswith("image/"):
+            telegram_file = document
+            ext = (document.file_name or "").rsplit(".", 1)[-1].lower() if "." in (document.file_name or "") else "png"
+
+        if not telegram_file:
+            await update.message.reply_text(ui_text(cfg, "asset_upload_invalid"))
+            return
+
+        try:
+            file_obj = await context.bot.get_file(telegram_file.file_id)
+            target_abs, target_rel = asset_paths(user_id, mode, asset_type, ext)
+            target_abs.parent.mkdir(parents=True, exist_ok=True)
+            await file_obj.download_to_drive(str(target_abs))
+        except Exception:
+            await update.message.reply_text(ui_text(cfg, "asset_upload_error"))
+            return
+
+        path_key = f"{mode}_{asset_type}_image_path"
+        file_key = f"{mode}_{asset_type}_file_id"
+        old_path = str(cfg.get(path_key) or "")
+        if old_path and old_path != target_rel:
+            clear_asset_file(old_path)
+        cfg[path_key] = target_rel
+        cfg[file_key] = telegram_file.file_id
+        save_client(user_id, cfg)
+        context.user_data.pop("awaiting_asset_upload", None)
+
+        notice = ui_text(cfg, "asset_saved_watermark") if asset_type == "watermark" else ui_text(cfg, "asset_saved_template")
+        menu_text = ui_text(cfg, "channel_selected_now").format(channel=cfg.get("channel") or selected_channel) + "\n\n" + notice + "\n\n" + output_settings_text(cfg, mode)
+        submenu = build_creative_output_submenu(cfg) if mode == "creative" else build_rss_output_submenu(cfg)
+        await update.message.reply_text(menu_text, reply_markup=submenu)
+        return
+
     text = (update.message.text or update.message.caption or "").strip()
     if not text:
         return
@@ -2884,7 +3079,7 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         cfg["rss_cta_entities"] = [_message_entity_to_dict(entity) for entity in (update.message.entities or [])]
         save_client(user_id, cfg)
         await update.message.reply_text(
-            ui_text(cfg, "rss_cta_saved") + "\n\n" + ui_text(cfg, "rss_output_settings_title"),
+            ui_text(cfg, "rss_cta_saved") + "\n\n" + output_settings_text(cfg, "rss"),
             reply_markup=build_rss_output_submenu(cfg),
         )
         return
