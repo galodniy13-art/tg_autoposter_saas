@@ -2164,12 +2164,19 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
         await q.answer()
-        msg = creator_make_post(user_id, cfg)
-        save_client(user_id, cfg)
-        await q.message.reply_text(
-            ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + "🧪 Preview:\n\n" + msg,
-            reply_markup=build_creative_submenu(cfg),
-        )
+        try:
+            msg = creator_make_post(user_id, cfg)
+            save_client(user_id, cfg)
+            await q.message.reply_text(
+                ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + "🧪 Preview:\n\n" + msg,
+                reply_markup=build_creative_submenu(cfg),
+            )
+        except Exception:
+            logger.exception("Creative preview failed for user %s", user_id)
+            await q.message.reply_text(
+                ui_text(cfg, "preview_temporarily_unavailable"),
+                reply_markup=build_creative_submenu(cfg),
+            )
         return
 
     if data == "ui:mode:rss:menu":
@@ -2211,15 +2218,27 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
         await q.answer()
-        preview, image_url, preview_entities, temp_file = await rss_preview_text(context.bot, user_id, cfg)
-        await q.message.reply_text(ui_text(cfg, "channel_selected_now").format(channel=selected))
+        temp_file = None
         try:
+            preview, image_url, preview_entities, temp_file = await rss_preview_text(context.bot, user_id, cfg)
+            await q.message.reply_text(ui_text(cfg, "channel_selected_now").format(channel=selected))
             if image_url:
-                caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in preview_entities], max_offset=1024)
-                photo_input = temp_file if temp_file else image_url
-                await q.message.reply_photo(photo=photo_input, caption=preview[:1024], caption_entities=caption_entities or None, reply_markup=build_rss_submenu(cfg))
-            else:
-                await q.message.reply_text(preview, entities=preview_entities or None, reply_markup=build_rss_submenu(cfg))
+                try:
+                    caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in preview_entities], max_offset=1024)
+                    photo_input = temp_file if temp_file else image_url
+                    await q.message.reply_photo(photo=photo_input, caption=preview[:1024], caption_entities=caption_entities or None, reply_markup=build_rss_submenu(cfg))
+                    return
+                except Exception:
+                    logger.exception("RSS preview media send failed for user %s", user_id)
+                    await q.message.reply_text(ui_text(cfg, "preview_fallback_text_only"))
+
+            await q.message.reply_text(preview, entities=preview_entities or None, reply_markup=build_rss_submenu(cfg))
+        except Exception:
+            logger.exception("RSS preview failed for user %s", user_id)
+            await q.message.reply_text(
+                ui_text(cfg, "preview_temporarily_unavailable"),
+                reply_markup=build_rss_submenu(cfg),
+            )
         finally:
             if temp_file:
                 try:
