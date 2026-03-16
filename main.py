@@ -446,6 +446,8 @@ def load_client(user_id: int) -> dict:
     before_normalize = json.dumps(cfg, ensure_ascii=False, sort_keys=True)
     for k, v in DEFAULT_CLIENT.items():
         cfg.setdefault(k, v)
+    if (cfg.get("mode") or "").strip().lower() == "creative":
+        cfg["mode"] = "creator"
     normalize_channels(cfg)
     ensure_channel_settings(cfg)
     apply_active_channel_settings(cfg)
@@ -2491,7 +2493,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:backmain":
-        await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
+        await send_menu(update, cfg, tr(cfg, "menu_title"))
         return
 
     if data == "ui:help":
