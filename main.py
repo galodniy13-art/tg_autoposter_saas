@@ -125,7 +125,7 @@ TEXTS = {
 "btn_post": "🚀 Post now",
 "btn_on": "🤖 Autopost ON",
 "btn_off": "🛑 OFF",
-        "btn_pay": "💳 Payment",
+        "btn_pay": "💳 Buy posting plan",
 "btn_status": "ℹ️ Status",
 "btn_schedule": "🕒 Schedule",
 "btn_showstyle": "📄 Show style",
@@ -140,7 +140,7 @@ TEXTS = {
     "2) Mode chosen?\n"
     "   /mode rss  or  /mode creator\n\n"
     "3) RSS mode: feeds added?\n"
-    "   /addfeed https://site.com/rss\n\n"
+    "   /addfeed [your link]\n\n"
     "4) Style set?\n"
     "   /setstyle <paste your style prompt>\n\n"
     "5) Test preview:\n"
@@ -148,7 +148,7 @@ TEXTS = {
     "6) Paid posting:\n"
     "   Ask admin to activate, then /fetchonce or /autoposton"
 ),
-"ui_addfeed": "Paste your RSS link like:\n/addfeed https://site.com/rss",
+"ui_addfeed": "Paste your RSS link like:\n/addfeed [your link]",
 "ui_setchannel": "Type your channel username like:\n/setchannel @yourchannel\n\nBot must be admin in the channel.",
 "ui_setstyle": "Paste your style prompt like:\n/setstyle <your text>\n\nExample: language, tone, length, emojis, forbidden topics.",
 "ui_pay": "Payment / activation:\n{pay}",
@@ -172,7 +172,7 @@ TEXTS = {
             "   /mode rss  (news repost)\n"
             "   /mode creator  (original text posts)\n\n"
             "3A) RSS mode: add sources\n"
-            "   /addfeed https://site.com/rss\n"
+            "   /addfeed [your link]\n"
             "   Repeat /addfeed to add more.\n\n"
             "3B) Creator mode: set profile (who you are + what you sell)\n"
             "   /setprofile <paste your profile text>\n\n"
@@ -201,7 +201,7 @@ TEXTS = {
 "btn_post": "🚀 Опубликовать",
 "btn_on": "🤖 Автопост ВКЛ",
 "btn_off": "🛑 ВЫКЛ",
-        "btn_pay": "💳 Оплата",
+        "btn_pay": "💳 Купить пакет постов",
 "btn_status": "ℹ️ Статус",
 "btn_schedule": "🕒 Расписание",
 "btn_showstyle": "📄 Показать стиль",
@@ -216,7 +216,7 @@ TEXTS = {
     "2) Режим выбран?\n"
     "   /mode rss  или  /mode creator\n\n"
     "3) RSS-режим: ленты добавлены?\n"
-    "   /addfeed https://site.com/rss\n\n"
+    "   /addfeed [ваша ссылка]\n\n"
     "4) Стиль задан?\n"
     "   /setstyle <вставьте prompt>\n\n"
     "5) Тест превью:\n"
@@ -224,7 +224,7 @@ TEXTS = {
     "6) Публикации (платно):\n"
     "   Активация админом, потом /fetchonce или /autoposton"
 ),
-"ui_addfeed": "Вставьте RSS ссылку так:\n/addfeed https://site.com/rss",
+"ui_addfeed": "Вставьте RSS ссылку так:\n/addfeed [ваша ссылка]",
 "ui_setchannel": "Напишите юзернейм канала так:\n/setchannel @вашканал\n\nБот должен быть админом канала.",
 "ui_setstyle": "Вставьте prompt стиля так:\n/setstyle <ваш текст>\n\nПример: язык, тон, длина, эмодзи, запреты.",
 "ui_pay": "Оплата / активация:\n{pay}",
@@ -248,7 +248,7 @@ TEXTS = {
             "   /mode rss  (репост новостей)\n"
             "   /mode creator  (оригинальные текстовые посты)\n\n"
             "3A) RSS-режим: добавьте источники\n"
-            "   /addfeed https://site.com/rss\n"
+            "   /addfeed [ваша ссылка]\n"
             "   Повторяйте /addfeed, чтобы добавить ещё.\n\n"
             "3B) Creator-режим: задайте профиль (кто вы + что продаёте)\n"
             "   /setprofile <вставьте профиль>\n\n"
@@ -2932,7 +2932,8 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         left = 3 - len(examples)
         if left > 0:
             context.user_data["copy_style"] = copy_style
-            await update.message.reply_text(ui_text(cfg, "copy_style_progress").format(left=left))
+            suffix = "" if ((cfg.get("language") or "en").lower() == "ru" and left == 1) else "а"
+            await update.message.reply_text(ui_text(cfg, "copy_style_progress").format(left=left, suffix=suffix))
             return
 
         context.user_data.pop("copy_style", None)
@@ -3134,7 +3135,7 @@ async def addfeed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     cfg = load_client(user_id)
 
     if not context.args:
-        await update.message.reply_text("Usage: /addfeed https://site.com/rss")
+        await update.message.reply_text("Usage: /addfeed [your link]")
         return
 
     url = context.args[0].strip()
