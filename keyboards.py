@@ -143,13 +143,15 @@ def build_prompt_builder_review_menu(labels: dict, mode: str) -> InlineKeyboardM
     )
 
 
-def build_rss_output_menu(labels: dict, include_source_link: bool, use_feed_image: bool) -> InlineKeyboardMarkup:
+def build_rss_output_menu(labels: dict, include_source_link: bool, use_feed_image: bool, cta_enabled: bool) -> InlineKeyboardMarkup:
     source_label = labels["btn_source_link_on"] if include_source_link else labels["btn_source_link_off"]
     image_label = labels["btn_feed_image_on"] if use_feed_image else labels["btn_feed_image_off"]
+    cta_label = labels["btn_rss_cta_on"] if cta_enabled else labels["btn_rss_cta_off"]
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(source_label, callback_data="ui:rss:toggle_source_link")],
             [InlineKeyboardButton(image_label, callback_data="ui:rss:toggle_feed_image")],
+            [InlineKeyboardButton(cta_label, callback_data="ui:rss:toggle_cta")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:rss:menu")],
         ]
     )
