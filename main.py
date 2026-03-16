@@ -1,9 +1,11 @@
 import asyncio
+import io
 import json
 import logging
 import os
 import re
 import threading
+import tempfile
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl, urlencode
@@ -12,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import feedparser
 import requests
 from dotenv import load_dotenv
+from PIL import Image
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, Update
 
@@ -959,29 +962,123 @@ def build_rss_message_payload(cfg: dict, msg: str, link: str) -> tuple[str, list
     return prefix + cta_text, entities
 
 
-async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str, image_url: str | None) -> None:
+async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str, image_url: str | None, temp_file: Path | None = None) -> None:
     final_text, final_entities = build_rss_message_payload(cfg, msg, link)
-    if bool(cfg.get("use_rss_feed_image", True)) and image_url:
-        caption = final_text
-        if len(caption) > 1024:
-            caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in final_entities], max_offset=1024)
-            await bot.send_photo(chat_id=channel, photo=image_url, caption=caption[:1024], caption_entities=caption_entities or None)
-            if len(final_text) > 1024:
-                remainder_entities = _load_message_entities(
-                    [_message_entity_to_dict(e) for e in final_entities],
-                    min_offset=1024,
-                )
-                await bot.send_message(
-                    chat_id=channel,
-                    text=final_text[1024:],
-                    entities=remainder_entities or None,
-                    disable_web_page_preview=False,
-                )
+    try:
+        if bool(cfg.get("use_rss_feed_image", True)) and image_url:
+            caption = final_text
+            if len(caption) > 1024:
+                caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in final_entities], max_offset=1024)
+                await bot.send_photo(chat_id=channel, photo=image_url, caption=caption[:1024], caption_entities=caption_entities or None)
+                if len(final_text) > 1024:
+                    remainder_entities = _load_message_entities(
+                        [_message_entity_to_dict(e) for e in final_entities],
+                        min_offset=1024,
+                    )
+                    await bot.send_message(
+                        chat_id=channel,
+                        text=final_text[1024:],
+                        entities=remainder_entities or None,
+                        disable_web_page_preview=False,
+                    )
+                return
+            await bot.send_photo(chat_id=channel, photo=image_url, caption=caption, caption_entities=final_entities or None)
             return
-        await bot.send_photo(chat_id=channel, photo=image_url, caption=caption, caption_entities=final_entities or None)
-        return
 
-    await bot.send_message(chat_id=channel, text=final_text, entities=final_entities or None, disable_web_page_preview=False)
+        await bot.send_message(chat_id=channel, text=final_text, entities=final_entities or None, disable_web_page_preview=False)
+    finally:
+        if temp_file:
+            try:
+                temp_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+async def _ensure_asset_path(bot, cfg: dict, user_id: int, mode: str, asset_type: str) -> str:
+    path_key = f"{mode}_{asset_type}_image_path"
+    existing_rel = str(cfg.get(path_key) or "").strip()
+    if existing_rel:
+        existing_abs = BASE_DIR / existing_rel
+        if existing_abs.exists() and existing_abs.is_file():
+            return existing_rel
+
+    file_id = str(cfg.get(f"{mode}_{asset_type}_file_id") or "").strip()
+    if not file_id:
+        return ""
+
+    try:
+        file_obj = await bot.get_file(file_id)
+        ext = "png" if asset_type == "watermark" else "jpg"
+        target_abs, target_rel = asset_paths(user_id, mode, asset_type, ext)
+        target_abs.parent.mkdir(parents=True, exist_ok=True)
+        await file_obj.download_to_drive(str(target_abs))
+        cfg[path_key] = target_rel
+        return target_rel
+    except Exception:
+        logger.exception("Failed to download %s %s asset", mode, asset_type)
+        return ""
+
+
+def _compose_rss_image(template_path: Path, rss_image_url: str, watermark_path: Path | None = None) -> Path | None:
+    try:
+        base = Image.open(template_path).convert("RGBA")
+        rss_resp = requests.get(rss_image_url, timeout=20)
+        rss_resp.raise_for_status()
+        rss_img = Image.open(io.BytesIO(rss_resp.content)).convert("RGBA")
+
+        canvas_w, canvas_h = base.size
+        margin_x = max(8, int(canvas_w * 0.08))
+        margin_y = max(8, int(canvas_h * 0.08))
+        area_w = max(1, canvas_w - 2 * margin_x)
+        area_h = max(1, canvas_h - 2 * margin_y)
+
+        scale = max(area_w / max(1, rss_img.width), area_h / max(1, rss_img.height))
+        resized = rss_img.resize((max(1, int(rss_img.width * scale)), max(1, int(rss_img.height * scale))), Image.Resampling.LANCZOS)
+        crop_left = max(0, (resized.width - area_w) // 2)
+        crop_top = max(0, (resized.height - area_h) // 2)
+        fitted = resized.crop((crop_left, crop_top, crop_left + area_w, crop_top + area_h))
+        base.paste(fitted, (margin_x, margin_y), fitted)
+
+        if watermark_path and watermark_path.exists() and watermark_path.is_file():
+            wm = Image.open(watermark_path).convert("RGBA")
+            max_w = max(24, int(canvas_w * 0.22))
+            max_h = max(24, int(canvas_h * 0.12))
+            wm.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+            pad = max(8, int(min(canvas_w, canvas_h) * 0.03))
+            pos = (canvas_w - wm.width - pad, canvas_h - wm.height - pad)
+            base.paste(wm, pos, wm)
+
+        composed = base.convert("RGB")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+            temp_path = Path(tmp.name)
+        composed.save(temp_path, format="JPEG", quality=92, optimize=True)
+        return temp_path
+    except Exception:
+        logger.exception("RSS image composition failed")
+        return None
+
+
+async def prepare_rss_image_for_sending(bot, cfg: dict, user_id: int, image_url: str | None) -> tuple[str | None, Path | None]:
+    if not image_url:
+        return None, None
+    if not bool(cfg.get("use_rss_feed_image", True)):
+        return image_url, None
+    if str(cfg.get("mode") or "").strip().lower() not in ("rss", "both"):
+        return image_url, None
+
+    template_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "template")
+    if not template_rel:
+        return image_url, None
+    template_path = BASE_DIR / template_rel
+    if not template_path.exists() or not template_path.is_file():
+        return image_url, None
+
+    watermark_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "watermark")
+    watermark_path = (BASE_DIR / watermark_rel) if watermark_rel else None
+    composed_path = _compose_rss_image(template_path, image_url, watermark_path)
+    if not composed_path:
+        return image_url, None
+    return str(composed_path), composed_path
 
 # ===================== LLM providers =====================
 def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str) -> str:
@@ -1592,13 +1689,13 @@ def parse_schedule_input(text: str) -> list[str] | None:
     return sorted(set(chunks))
 
 
-def rss_preview_text(user_id: int, cfg: dict) -> tuple[str, str | None, list[MessageEntity]]:
+async def rss_preview_text(bot, user_id: int, cfg: dict) -> tuple[str, str | None, list[MessageEntity], Path | None]:
     feeds = cfg.get("feeds", [])
     if not feeds:
-        return ui_text(cfg, "preview_no_feeds"), None, []
+        return ui_text(cfg, "preview_no_feeds"), None, [], None
     best = pick_newest_unseen(cfg)
     if not best:
-        return "No new items found (or everything already posted).", None, []
+        return "No new items found (or everything already posted).", None, [], None
     _, title, link, src = best
     summary = extract_summary_for_link(src, link)
     msg = llm_generate_post(user_id, cfg, title, summary, link)
@@ -1606,7 +1703,8 @@ def rss_preview_text(user_id: int, cfg: dict) -> tuple[str, str | None, list[Mes
     text, entities = build_rss_message_payload(cfg, msg, link)
     preview_prefix = "🧪 Preview:\n\n"
     preview_entities = _load_message_entities([_message_entity_to_dict(e) for e in entities], offset_shift=len(preview_prefix))
-    return preview_prefix + text, image_url, preview_entities
+    send_image_url, temp_file = await prepare_rss_image_for_sending(bot, cfg, user_id, image_url)
+    return preview_prefix + text, send_image_url, preview_entities, temp_file
 
 def feeds_overview(cfg: dict) -> str:
     feeds = cfg.get("feeds", [])
@@ -2092,13 +2190,20 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
         await q.answer()
-        preview, image_url, preview_entities = rss_preview_text(user_id, cfg)
+        preview, image_url, preview_entities, temp_file = await rss_preview_text(context.bot, user_id, cfg)
         await q.message.reply_text(ui_text(cfg, "channel_selected_now").format(channel=selected))
-        if image_url:
-            caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in preview_entities], max_offset=1024)
-            await q.message.reply_photo(photo=image_url, caption=preview[:1024], caption_entities=caption_entities or None, reply_markup=build_rss_submenu(cfg))
-        else:
-            await q.message.reply_text(preview, entities=preview_entities or None, reply_markup=build_rss_submenu(cfg))
+        try:
+            if image_url:
+                caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in preview_entities], max_offset=1024)
+                await q.message.reply_photo(photo=image_url, caption=preview[:1024], caption_entities=caption_entities or None, reply_markup=build_rss_submenu(cfg))
+            else:
+                await q.message.reply_text(preview, entities=preview_entities or None, reply_markup=build_rss_submenu(cfg))
+        finally:
+            if temp_file:
+                try:
+                    temp_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
         return
 
     if data in ("ui:schedule:rss:menu", "ui:schedule:creative:menu"):
@@ -3455,15 +3560,22 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await reply_ui(update, "No new items found (or everything already posted).", cfg, show_menu=True)
         return
 
-    preview, image_url, preview_entities = rss_preview_text(user_id, cfg)
-    if image_url and update.message:
-        caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in preview_entities], max_offset=1024)
-        await update.message.reply_photo(photo=image_url, caption=preview[:1024], caption_entities=caption_entities or None, reply_markup=build_main_menu_clean(cfg))
-        return
-    if update.message:
-        await update.message.reply_text(preview, entities=preview_entities or None, reply_markup=build_main_menu_clean(cfg))
-        return
-    await reply_ui(update, preview, cfg, show_menu=True)
+    preview, image_url, preview_entities, temp_file = await rss_preview_text(context.bot, user_id, cfg)
+    try:
+        if image_url and update.message:
+            caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in preview_entities], max_offset=1024)
+            await update.message.reply_photo(photo=image_url, caption=preview[:1024], caption_entities=caption_entities or None, reply_markup=build_main_menu_clean(cfg))
+            return
+        if update.message:
+            await update.message.reply_text(preview, entities=preview_entities or None, reply_markup=build_main_menu_clean(cfg))
+            return
+        await reply_ui(update, preview, cfg, show_menu=True)
+    finally:
+        if temp_file:
+            try:
+                temp_file.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -3502,7 +3614,8 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             summary = extract_summary_for_link(src, link)
             msg = llm_generate_post(user_id, cfg, title, summary, link)
             image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
-            await send_rss_to_channel(context.bot, cfg, channel, msg, link, image_url)
+            send_image_url, temp_file = await prepare_rss_image_for_sending(context.bot, cfg, user_id, image_url)
+            await send_rss_to_channel(context.bot, cfg, channel, msg, link, send_image_url, temp_file)
             cfg.setdefault("posted_urls", [])
             cfg["posted_urls"].append(link)
             cfg["posted_urls"] = cfg["posted_urls"][-int(cfg.get("max_dedupe", 1500)):]
@@ -3531,8 +3644,9 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     summary = extract_summary_for_link(src, link)
     msg = llm_generate_post(user_id, cfg, title, summary, link)
     image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
+    send_image_url, temp_file = await prepare_rss_image_for_sending(context.bot, cfg, user_id, image_url)
 
-    await send_rss_to_channel(context.bot, cfg, channel, msg, link, image_url)
+    await send_rss_to_channel(context.bot, cfg, channel, msg, link, send_image_url, temp_file)
 
     cfg.setdefault("posted_urls", [])
     cfg["posted_urls"].append(link)
@@ -3896,8 +4010,9 @@ async def autopost_loop(app: Application) -> None:
                 summary = extract_summary_for_link(src, link)
                 msg = llm_generate_post(user_id, cfg, title, summary, link)
                 image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
+                send_image_url, temp_file = await prepare_rss_image_for_sending(app.bot, cfg, user_id, image_url)
 
-                await send_rss_to_channel(app.bot, cfg, channel, msg, link, image_url)
+                await send_rss_to_channel(app.bot, cfg, channel, msg, link, send_image_url, temp_file)
 
                 cfg.setdefault("posted_urls", [])
                 cfg["posted_urls"].append(link)
