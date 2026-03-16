@@ -3126,9 +3126,14 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         if photo:
             telegram_file = photo
             ext = "jpg"
-        elif document and (document.mime_type or "").startswith("image/"):
-            telegram_file = document
-            ext = (document.file_name or "").rsplit(".", 1)[-1].lower() if "." in (document.file_name or "") else "png"
+        elif document:
+            doc_name = (document.file_name or "").lower()
+            doc_ext = doc_name.rsplit(".", 1)[-1] if "." in doc_name else ""
+            mime_is_image = (document.mime_type or "").startswith("image/")
+            ext_is_image = doc_ext in {"jpg", "jpeg", "png", "webp", "bmp", "gif"}
+            if mime_is_image or ext_is_image:
+                telegram_file = document
+                ext = doc_ext or "png"
 
         if not telegram_file:
             await update.message.reply_text(ui_text(cfg, "asset_upload_invalid"))
@@ -4112,7 +4117,12 @@ def main() -> None:
     app.add_handler(CommandHandler("setchannels", setchannels_cmd))
     app.add_handler(CommandHandler("setinterval", setinterval_admin_cmd))
 
-    app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND, wizard_text_handler))
+    app.add_handler(
+        MessageHandler(
+            (filters.TEXT | filters.CAPTION | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND,
+            wizard_text_handler,
+        )
+    )
 
     app.run_polling(drop_pending_updates=True)
 
