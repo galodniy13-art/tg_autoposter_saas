@@ -33,6 +33,7 @@ from keyboards import (
     build_rss_ai_menu,
     build_rss_output_menu,
     build_creative_output_menu,
+    build_asset_management_menu,
     build_feed_management_menu,
     build_feed_delete_menu,
     build_channel_delete_menu,
@@ -966,10 +967,11 @@ async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str,
     final_text, final_entities = build_rss_message_payload(cfg, msg, link)
     try:
         if bool(cfg.get("use_rss_feed_image", True)) and image_url:
+            photo_input = temp_file if temp_file else image_url
             caption = final_text
             if len(caption) > 1024:
                 caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in final_entities], max_offset=1024)
-                await bot.send_photo(chat_id=channel, photo=image_url, caption=caption[:1024], caption_entities=caption_entities or None)
+                await bot.send_photo(chat_id=channel, photo=photo_input, caption=caption[:1024], caption_entities=caption_entities or None)
                 if len(final_text) > 1024:
                     remainder_entities = _load_message_entities(
                         [_message_entity_to_dict(e) for e in final_entities],
@@ -982,7 +984,7 @@ async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str,
                         disable_web_page_preview=False,
                     )
                 return
-            await bot.send_photo(chat_id=channel, photo=image_url, caption=caption, caption_entities=final_entities or None)
+            await bot.send_photo(chat_id=channel, photo=photo_input, caption=caption, caption_entities=final_entities or None)
             return
 
         await bot.send_message(chat_id=channel, text=final_text, entities=final_entities or None, disable_web_page_preview=False)
@@ -1489,6 +1491,11 @@ def build_creative_output_submenu(cfg: dict) -> InlineKeyboardMarkup:
     return build_creative_output_menu(ui_pack(cfg))
 
 
+def build_asset_management_submenu(cfg: dict, mode: str, asset_type: str) -> InlineKeyboardMarkup:
+    has_asset = bool(cfg.get(f"{mode}_{asset_type}_file_id"))
+    return build_asset_management_menu(ui_pack(cfg), mode, asset_type, has_asset)
+
+
 def post_format_assets_text(cfg: dict, mode: str) -> str:
     template_key = f"{mode}_template_file_id"
     watermark_key = f"{mode}_watermark_file_id"
@@ -1501,6 +1508,20 @@ def output_settings_text(cfg: dict, mode: str) -> str:
     if mode == "rss":
         return ui_text(cfg, "rss_output_settings_title") + "\n\n" + post_format_assets_text(cfg, mode)
     return ui_text(cfg, "creative_output_settings_title") + "\n\n" + post_format_assets_text(cfg, mode)
+
+
+def asset_management_text(cfg: dict, mode: str, asset_type: str) -> str:
+    title_key = "asset_manage_watermark_title" if asset_type == "watermark" else "asset_manage_template_title"
+    help_key = "asset_manage_watermark_help" if asset_type == "watermark" else "asset_manage_template_help"
+    status_key = f"{mode}_{asset_type}_file_id"
+    status_value = ui_text(cfg, "status_added") if cfg.get(status_key) else ui_text(cfg, "status_not_added")
+    return (
+        ui_text(cfg, title_key)
+        + "\n\n"
+        + ui_text(cfg, help_key)
+        + "\n"
+        + ui_text(cfg, "asset_manage_status").format(status=status_value)
+    )
 
 
 def asset_paths(user_id: int, mode: str, asset_type: str, ext: str) -> tuple[Path, str]:
@@ -2195,7 +2216,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         try:
             if image_url:
                 caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in preview_entities], max_offset=1024)
-                await q.message.reply_photo(photo=image_url, caption=preview[:1024], caption_entities=caption_entities or None, reply_markup=build_rss_submenu(cfg))
+                photo_input = temp_file if temp_file else image_url
+                await q.message.reply_photo(photo=photo_input, caption=preview[:1024], caption_entities=caption_entities or None, reply_markup=build_rss_submenu(cfg))
             else:
                 await q.message.reply_text(preview, entities=preview_entities or None, reply_markup=build_rss_submenu(cfg))
         finally:
@@ -2421,6 +2443,118 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.edit_message_text(text=text, reply_markup=build_creative_output_submenu(cfg))
         except BadRequest:
             await q.message.reply_text(text=text, reply_markup=build_creative_output_submenu(cfg))
+        return
+
+    if data in (
+        "ui:rss:asset:template",
+        "ui:rss:asset:watermark",
+        "ui:creative:asset:template",
+        "ui:creative:asset:watermark",
+    ):
+        mode = "creative" if data.startswith("ui:creative") else "rss"
+        asset_type = "watermark" if data.endswith("watermark") else "template"
+        action = "creative_output" if mode == "creative" else "rss_output"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, action, f"ui:mode:{mode}:menu"),
+            )
+            return
+        await q.answer()
+        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + asset_management_text(cfg, mode, asset_type)
+        submenu = build_asset_management_submenu(cfg, mode, asset_type)
+        try:
+            await q.edit_message_text(text=text, reply_markup=submenu)
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=submenu)
+
+        asset_file_id = str(cfg.get(f"{mode}_{asset_type}_file_id") or "").strip()
+        asset_path = str(cfg.get(f"{mode}_{asset_type}_image_path") or "").strip()
+        if asset_file_id:
+            try:
+                await q.message.reply_photo(photo=asset_file_id)
+            except Exception:
+                if asset_path:
+                    asset_abs = BASE_DIR / asset_path
+                    if asset_abs.exists() and asset_abs.is_file():
+                        try:
+                            with asset_abs.open("rb") as f:
+                                await q.message.reply_photo(photo=f)
+                        except Exception:
+                            pass
+        return
+
+    if data in (
+        "ui:rss:asset:template:add",
+        "ui:rss:asset:watermark:add",
+        "ui:creative:asset:template:add",
+        "ui:creative:asset:watermark:add",
+    ):
+        mode = "creative" if data.startswith("ui:creative") else "rss"
+        asset_type = "watermark" if ":watermark:" in data else "template"
+        action = "creative_output" if mode == "creative" else "rss_output"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, action, f"ui:mode:{mode}:menu"),
+            )
+            return
+        context.user_data["awaiting_asset_upload"] = {"mode": mode, "asset": asset_type, "channel": selected}
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            + "\n\n"
+            + (ui_text(cfg, "asset_prompt_send_watermark") if asset_type == "watermark" else ui_text(cfg, "asset_prompt_send_template"))
+        )
+        return
+
+    if data in (
+        "ui:rss:asset:template:delete",
+        "ui:rss:asset:watermark:delete",
+        "ui:creative:asset:template:delete",
+        "ui:creative:asset:watermark:delete",
+    ):
+        mode = "creative" if data.startswith("ui:creative") else "rss"
+        asset_type = "watermark" if ":watermark:" in data else "template"
+        action = "creative_output" if mode == "creative" else "rss_output"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, action, f"ui:mode:{mode}:menu"),
+            )
+            return
+        path_key = f"{mode}_{asset_type}_image_path"
+        file_key = f"{mode}_{asset_type}_file_id"
+        clear_asset_file(str(cfg.get(path_key) or ""))
+        cfg[path_key] = ""
+        cfg[file_key] = ""
+        save_client(user_id, cfg)
+        await q.answer()
+        notice = ui_text(cfg, "asset_deleted_watermark") if asset_type == "watermark" else ui_text(cfg, "asset_deleted_template")
+        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + notice + "\n\n" + asset_management_text(cfg, mode, asset_type)
+        submenu = build_asset_management_submenu(cfg, mode, asset_type)
+        try:
+            await q.edit_message_text(text=text, reply_markup=submenu)
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=submenu)
         return
 
     if data in (
@@ -3569,7 +3703,8 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     try:
         if image_url and update.message:
             caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in preview_entities], max_offset=1024)
-            await update.message.reply_photo(photo=image_url, caption=preview[:1024], caption_entities=caption_entities or None, reply_markup=build_main_menu_clean(cfg))
+            photo_input = temp_file if temp_file else image_url
+            await update.message.reply_photo(photo=photo_input, caption=preview[:1024], caption_entities=caption_entities or None, reply_markup=build_main_menu_clean(cfg))
             return
         if update.message:
             await update.message.reply_text(preview, entities=preview_entities or None, reply_markup=build_main_menu_clean(cfg))
