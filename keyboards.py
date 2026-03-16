@@ -165,14 +165,8 @@ def build_rss_output_menu(labels: dict, include_source_link: bool, use_feed_imag
             [InlineKeyboardButton(source_label, callback_data="ui:rss:toggle_source_link")],
             [InlineKeyboardButton(image_label, callback_data="ui:rss:toggle_feed_image")],
             [InlineKeyboardButton(cta_label, callback_data="ui:rss:toggle_cta")],
-            [
-                InlineKeyboardButton(labels["btn_add_template_image"], callback_data="ui:rss:add_template_image"),
-                InlineKeyboardButton(labels["btn_delete_template_image"], callback_data="ui:rss:delete_template_image"),
-            ],
-            [
-                InlineKeyboardButton(labels["btn_add_watermark"], callback_data="ui:rss:add_watermark"),
-                InlineKeyboardButton(labels["btn_delete_watermark"], callback_data="ui:rss:delete_watermark"),
-            ],
+            [InlineKeyboardButton(labels["btn_edit_template_image"], callback_data="ui:rss:asset:template")],
+            [InlineKeyboardButton(labels["btn_edit_watermark"], callback_data="ui:rss:asset:watermark")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:rss:menu")],
         ]
     )
@@ -181,17 +175,23 @@ def build_rss_output_menu(labels: dict, include_source_link: bool, use_feed_imag
 def build_creative_output_menu(labels: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton(labels["btn_add_template_image"], callback_data="ui:creative:add_template_image"),
-                InlineKeyboardButton(labels["btn_delete_template_image"], callback_data="ui:creative:delete_template_image"),
-            ],
-            [
-                InlineKeyboardButton(labels["btn_add_watermark"], callback_data="ui:creative:add_watermark"),
-                InlineKeyboardButton(labels["btn_delete_watermark"], callback_data="ui:creative:delete_watermark"),
-            ],
+            [InlineKeyboardButton(labels["btn_edit_template_image"], callback_data="ui:creative:asset:template")],
+            [InlineKeyboardButton(labels["btn_edit_watermark"], callback_data="ui:creative:asset:watermark")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
         ]
     )
+
+
+def build_asset_management_menu(labels: dict, mode: str, asset_type: str, has_asset: bool) -> InlineKeyboardMarkup:
+    base = f"ui:{mode}:asset:{asset_type}"
+    rows = []
+    if has_asset:
+        rows.append([InlineKeyboardButton(labels["btn_replace_asset"], callback_data=base + ":add")])
+        rows.append([InlineKeyboardButton(labels["btn_delete_asset"], callback_data=base + ":delete")])
+    else:
+        rows.append([InlineKeyboardButton(labels["btn_add_asset"], callback_data=base + ":add")])
+    rows.append([InlineKeyboardButton(labels["btn_back"], callback_data=f"ui:{mode}:output")])
+    return InlineKeyboardMarkup(rows)
 
 
 def build_scheduling_menu(labels: dict) -> InlineKeyboardMarkup:
