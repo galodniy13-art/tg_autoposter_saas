@@ -657,13 +657,21 @@ def get_mode_prompt(user_id: int, cfg: dict, mode: str) -> str:
         return "Write a Telegram-ready post in plain text. No JSON, no code blocks."
     return "Rewrite the source into a Telegram-ready post in plain text. No JSON, no code blocks."
 
-def sanitize_llm_post(text: str, link: str) -> str:
+def sanitize_llm_post(text: str, cfg: dict, link: str) -> str:
     t = (text or "").replace("\r", "").strip()
 
     # trim common wrapper formatting
     t = re.sub(r"(?is)^```[a-z0-9_\-]*\s*", "", t).strip()
     t = re.sub(r"(?is)\s*```$", "", t).strip()
     t = re.sub(r"\n{3,}", "\n\n", t).strip()
+
+    include_source_link = bool(cfg.get("include_rss_source_link", True))
+    if not include_source_link:
+        # Respect RSS output setting: remove links and common source-attribution tails.
+        t = re.sub(r"https?://\S+", "", t)
+        t = re.sub(r"(?im)^\s*(source|источник)\s*:\s*.*$", "", t)
+        t = re.sub(r"(?im)^\s*(via|через)\s+@\w+\s*$", "", t)
+        t = re.sub(r"\n{3,}", "\n\n", t).strip()
 
     if not t:
         t = "📌 Коротко: в источнике мало деталей."
@@ -893,20 +901,26 @@ def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link
     title = clean_text(title)
     summary = clean_text(summary)
 
+    include_source_link = bool(cfg.get("include_rss_source_link", True))
+    source_block = f"Source URL: {link}\n" if include_source_link else ""
+
     prompt = (
         style_prompt + "\n\n"
-        "Use only facts from the source content below. Return plain Telegram-ready text (no JSON, no code blocks).\n\n"
+        "You are a Telegram editor. Rewrite naturally and clearly for Telegram; avoid robotic wording.\n"
+        "Use only facts from the source content below. Do not invent details.\n"
+        "Do not include source attribution, usernames, raw metadata, or links unless explicitly requested in the prompt/output settings.\n"
+        "Return plain Telegram-ready text (no JSON, no code blocks). Preserve requested paragraph spacing and formatting.\n\n"
         f"Title: {title}\n"
         f"Summary: {summary}\n"
-        f"Source URL: {link}\n"
+        f"{source_block}"
     )
 
     payload = {"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}
     r = requests.post(OLLAMA_URL, json=payload, timeout=60)
     r.raise_for_status()
     data = r.json()
-    txt = clean_text(data.get("response", ""))
-    return sanitize_llm_post(txt, link)
+    txt = data.get("response", "")
+    return sanitize_llm_post(txt, cfg, link)
 
 def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str) -> str:
     if not OPENAI_API_KEY:
@@ -916,11 +930,17 @@ def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: st
     title = clean_text(title)
     summary = clean_text(summary)
 
+    include_source_link = bool(cfg.get("include_rss_source_link", True))
+    source_block = f"Source URL: {link}\n" if include_source_link else ""
+
     user_content = (
         f"Title: {title}\n"
         f"Summary: {summary}\n"
-        f"Source URL: {link}\n\n"
-        "Use only facts from the source content. Return plain Telegram-ready text (no JSON, no code blocks)."
+        f"{source_block}\n"
+        "You are a Telegram editor. Rewrite naturally and clearly for Telegram; avoid robotic wording.\n"
+        "Use only facts from the source content. Do not invent details.\n"
+        "Do not include source attribution, usernames, raw metadata, or links unless explicitly requested in the prompt/output settings.\n"
+        "Return plain Telegram-ready text (no JSON, no code blocks). Preserve requested paragraph spacing and formatting."
     )
 
     url = OPENAI_BASE_URL.rstrip("/") + "/chat/completions"
@@ -938,7 +958,7 @@ def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: st
     r.raise_for_status()
     data = r.json()
     txt = data["choices"][0]["message"]["content"]
-    return sanitize_llm_post(clean_text(txt), link)
+    return sanitize_llm_post(txt, cfg, link)
 
 def llm_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str) -> str:
     if LLM_PROVIDER == "openai_compat":
@@ -975,7 +995,7 @@ def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
 
     if mode == "creative":
         user_content = (
-            "Create a clean, practical system prompt for generating original Telegram posts.\n"
+            "Create a clean, practical SYSTEM prompt for generating original Telegram posts.\n"
             f"Niche/topic: {answers.get('q1', '')}\n"
             f"Audience: {answers.get('q2', '')}\n"
             f"Tone/voice: {answers.get('q3', '')}\n"
@@ -984,11 +1004,16 @@ def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
             f"Avoid: {answers.get('q6', '')}\n"
             f"CTA preference: {answers.get('q7', '')}\n"
             f"Output language: {requested_language}\n\n"
-            "Return only the final prompt text. Keep it concise and Telegram-oriented."
+            "The generated prompt must: act as a Telegram content writer/editor; write naturally (not robotic); "
+            "prioritize clarity/readability; follow tone, length, audience and language settings; avoid copying source-like phrasing too closely; "
+            "avoid fake facts; avoid source mentions/usernames/links unless enabled by output settings; keep CTA placement clean when CTA is requested; "
+            "respect explicit formatting instructions (including empty lines).\n"
+            "Keep it flexible and publication-ready, not a rigid one-size-fits-all template.\n"
+            "Return only the final prompt text."
         )
     else:
         user_content = (
-            "Create a clean, practical system prompt for rewriting RSS/news into Telegram posts.\n"
+            "Create a clean, practical SYSTEM prompt for rewriting RSS/news into Telegram posts.\n"
             f"Feed/topic: {answers.get('q1', '')}\n"
             f"Audience: {answers.get('q2', '')}\n"
             f"Tone/voice: {answers.get('q3', '')}\n"
@@ -997,12 +1022,17 @@ def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
             f"CTA preference: {answers.get('q6', '')}\n"
             f"Avoid: {answers.get('q7', '')}\n"
             f"Output language: {requested_language}\n\n"
-            "Return only the final prompt text. Keep it concise and Telegram-oriented."
+            "The generated prompt must: act as a Telegram content writer/editor; rewrite naturally for Telegram; preserve important facts while avoiding inventions; "
+            "follow tone, length, audience and language settings; avoid copying source text too closely; avoid raw metadata/source mentions/usernames/links unless enabled; "
+            "respect explicit formatting instructions (including empty lines) and keep CTA placement clean when CTA is requested.\n"
+            "Keep it flexible and publication-ready, not a rigid one-size-fits-all template.\n"
+            "Return only the final prompt text."
         )
 
     system_content = (
-        "You are an expert prompt writer for Telegram content automation. "
-        "Produce one high-quality prompt that is practical, clear, and ready to use."
+        "You are an expert prompt engineer for Telegram automation workflows. "
+        "Write one strong, usable SYSTEM prompt tailored to the provided settings. "
+        "Avoid generic fluff and rigid skeletons; optimize for natural, high-quality Telegram posts."
     )
 
     if LLM_PROVIDER == "openai_compat":
@@ -1019,7 +1049,10 @@ def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
         r = requests.post(url, headers=headers, json=payload, timeout=60)
         r.raise_for_status()
         data = r.json()
-        generated = clean_text(data["choices"][0]["message"]["content"])[:2000]
+        generated = (data["choices"][0]["message"]["content"] or "").replace("\r", "").strip()
+        generated = re.sub(r"(?is)^```[a-z0-9_\-]*\s*", "", generated).strip()
+        generated = re.sub(r"(?is)\s*```$", "", generated).strip()
+        generated = re.sub(r"\n{3,}", "\n\n", generated)[:2000]
         return f"Output language: {requested_language}.\n{generated}"[:2000]
 
     payload = {
@@ -1030,7 +1063,10 @@ def llm_generate_prompt_builder(mode: str, answers: dict[str, str]) -> str:
     r = requests.post(OLLAMA_URL, json=payload, timeout=60)
     r.raise_for_status()
     data = r.json()
-    generated = clean_text(data.get("response", ""))[:2000]
+    generated = (data.get("response", "") or "").replace("\r", "").strip()
+    generated = re.sub(r"(?is)^```[a-z0-9_\-]*\s*", "", generated).strip()
+    generated = re.sub(r"(?is)\s*```$", "", generated).strip()
+    generated = re.sub(r"\n{3,}", "\n\n", generated)[:2000]
     return f"Output language: {requested_language}.\n{generated}"[:2000]
 
 
@@ -2230,8 +2266,6 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             + "\n\n"
             + current_text
             + "\n\n"
-            + ui_text(cfg, "prompt_guidance_creative")
-            + "\n\n"
             + ui_text(cfg, "prompt_edit_instructions")
             + "\n"
             + ui_text(cfg, "prompt_edit_cancel_hint")
@@ -2263,8 +2297,6 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             ui_text(cfg, "channel_selected_now").format(channel=selected)
             + "\n\n"
             + current_text
-            + "\n\n"
-            + ui_text(cfg, "prompt_guidance_rss")
             + "\n\n"
             + ui_text(cfg, "prompt_edit_instructions")
             + "\n"
