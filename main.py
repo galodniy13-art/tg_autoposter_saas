@@ -12,7 +12,7 @@ import feedparser
 import requests
 from dotenv import load_dotenv
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, Update
 
 from mode_ui import mode_set_text
 from keyboards import (
@@ -358,6 +358,7 @@ DEFAULT_CLIENT = {
     "use_rss_feed_image": True,
     "rss_cta_enabled": False,
     "rss_cta_text": "",
+    "rss_cta_entities": [],
 
     "autopost_enabled": False,
     "interval_minutes": 30,
@@ -402,6 +403,7 @@ CHANNEL_SCOPED_KEYS = (
     "use_rss_feed_image",
     "rss_cta_enabled",
     "rss_cta_text",
+    "rss_cta_entities",
     "rss_schedule_enabled",
     "rss_schedule_times",
     "rss_last_schedule_date",
@@ -880,31 +882,82 @@ def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int =
 
 
 def format_rss_message(cfg: dict, msg: str, link: str) -> str:
+    return build_rss_message_payload(cfg, msg, link)[0]
+
+
+def _message_entity_to_dict(entity: MessageEntity) -> dict:
+    data = entity.to_dict()
+    return {k: v for k, v in data.items() if v is not None}
+
+
+def _load_message_entities(data: list | None, offset_shift: int = 0, min_offset: int = 0, max_offset: int | None = None) -> list[MessageEntity]:
+    entities: list[MessageEntity] = []
+    for item in data or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            offset = int(item.get("offset", 0))
+            length = int(item.get("length", 0))
+        except (TypeError, ValueError):
+            continue
+        if length <= 0:
+            continue
+        start = offset + offset_shift
+        end = start + length
+        if start < min_offset:
+            continue
+        if max_offset is not None and end > max_offset:
+            continue
+        payload = dict(item)
+        payload["offset"] = start - min_offset
+        payload["length"] = length
+        try:
+            entities.append(MessageEntity(**payload))
+        except TypeError:
+            continue
+    return entities
+
+
+def build_rss_message_payload(cfg: dict, msg: str, link: str) -> tuple[str, list[MessageEntity]]:
     base_text = msg
     if bool(cfg.get("include_rss_source_link", True)):
         base_text = f"{base_text}\n\n{link}"
 
-    if bool(cfg.get("rss_cta_enabled", False)):
-        cta_text = (cfg.get("rss_cta_text") or "").strip()
-        if cta_text:
-            base_text = f"{base_text}\n\n{cta_text}"
+    if not bool(cfg.get("rss_cta_enabled", False)):
+        return base_text, []
 
-    return base_text
+    cta_text = cfg.get("rss_cta_text") or ""
+    if not cta_text.strip():
+        return base_text, []
+
+    prefix = f"{base_text}\n\n"
+    entities = _load_message_entities(cfg.get("rss_cta_entities"), offset_shift=len(prefix))
+    return prefix + cta_text, entities
 
 
 async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str, image_url: str | None) -> None:
-    final_text = format_rss_message(cfg, msg, link)
+    final_text, final_entities = build_rss_message_payload(cfg, msg, link)
     if bool(cfg.get("use_rss_feed_image", True)) and image_url:
         caption = final_text
         if len(caption) > 1024:
-            await bot.send_photo(chat_id=channel, photo=image_url, caption=caption[:1024])
+            caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in final_entities], max_offset=1024)
+            await bot.send_photo(chat_id=channel, photo=image_url, caption=caption[:1024], caption_entities=caption_entities or None)
             if len(final_text) > 1024:
-                await bot.send_message(chat_id=channel, text=final_text[1024:], disable_web_page_preview=False)
+                remainder_entities = _load_message_entities(
+                    [_message_entity_to_dict(e) for e in final_entities],
+                    min_offset=1024,
+                )
+                await bot.send_message(
+                    chat_id=channel,
+                    text=final_text[1024:],
+                    entities=remainder_entities or None,
+                    disable_web_page_preview=False,
+                )
             return
-        await bot.send_photo(chat_id=channel, photo=image_url, caption=caption)
+        await bot.send_photo(chat_id=channel, photo=image_url, caption=caption, caption_entities=final_entities or None)
         return
 
-    await bot.send_message(chat_id=channel, text=final_text, disable_web_page_preview=False)
+    await bot.send_message(chat_id=channel, text=final_text, entities=final_entities or None, disable_web_page_preview=False)
 
 # ===================== LLM providers =====================
 def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str) -> str:
@@ -1417,18 +1470,21 @@ def parse_schedule_input(text: str) -> list[str] | None:
     return sorted(set(chunks))
 
 
-def rss_preview_text(user_id: int, cfg: dict) -> tuple[str, str | None]:
+def rss_preview_text(user_id: int, cfg: dict) -> tuple[str, str | None, list[MessageEntity]]:
     feeds = cfg.get("feeds", [])
     if not feeds:
-        return ui_text(cfg, "preview_no_feeds"), None
+        return ui_text(cfg, "preview_no_feeds"), None, []
     best = pick_newest_unseen(cfg)
     if not best:
-        return "No new items found (or everything already posted).", None
+        return "No new items found (or everything already posted).", None, []
     _, title, link, src = best
     summary = extract_summary_for_link(src, link)
     msg = llm_generate_post(user_id, cfg, title, summary, link)
     image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
-    return "🧪 Preview:\n\n" + format_rss_message(cfg, msg, link), image_url
+    text, entities = build_rss_message_payload(cfg, msg, link)
+    preview_prefix = "🧪 Preview:\n\n"
+    preview_entities = _load_message_entities([_message_entity_to_dict(e) for e in entities], offset_shift=len(preview_prefix))
+    return preview_prefix + text, image_url, preview_entities
 
 def feeds_overview(cfg: dict) -> str:
     feeds = cfg.get("feeds", [])
@@ -1906,12 +1962,13 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
         await q.answer()
-        preview, image_url = rss_preview_text(user_id, cfg)
-        caption_or_text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + preview
+        preview, image_url, preview_entities = rss_preview_text(user_id, cfg)
+        await q.message.reply_text(ui_text(cfg, "channel_selected_now").format(channel=selected))
         if image_url:
-            await q.message.reply_photo(photo=image_url, caption=caption_or_text[:1024], reply_markup=build_rss_submenu(cfg))
+            caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in preview_entities], max_offset=1024)
+            await q.message.reply_photo(photo=image_url, caption=preview[:1024], caption_entities=caption_entities or None, reply_markup=build_rss_submenu(cfg))
         else:
-            await q.message.reply_text(caption_or_text, reply_markup=build_rss_submenu(cfg))
+            await q.message.reply_text(preview, entities=preview_entities or None, reply_markup=build_rss_submenu(cfg))
         return
 
     if data in ("ui:schedule:rss:menu", "ui:schedule:creative:menu"):
@@ -2701,6 +2758,7 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if context.user_data.get("awaiting_rss_cta_text"):
         context.user_data.pop("awaiting_rss_cta_text", None)
         cfg["rss_cta_text"] = text
+        cfg["rss_cta_entities"] = [_message_entity_to_dict(entity) for entity in (update.message.entities or [])]
         save_client(user_id, cfg)
         await update.message.reply_text(
             ui_text(cfg, "rss_cta_saved") + "\n\n" + ui_text(cfg, "rss_output_settings_title"),
@@ -3036,9 +3094,13 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await reply_ui(update, "No new items found (or everything already posted).", cfg, show_menu=True)
         return
 
-    preview, image_url = rss_preview_text(user_id, cfg)
+    preview, image_url, preview_entities = rss_preview_text(user_id, cfg)
     if image_url and update.message:
-        await update.message.reply_photo(photo=image_url, caption=preview[:1024], reply_markup=build_main_menu_clean(cfg))
+        caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in preview_entities], max_offset=1024)
+        await update.message.reply_photo(photo=image_url, caption=preview[:1024], caption_entities=caption_entities or None, reply_markup=build_main_menu_clean(cfg))
+        return
+    if update.message:
+        await update.message.reply_text(preview, entities=preview_entities or None, reply_markup=build_main_menu_clean(cfg))
         return
     await reply_ui(update, preview, cfg, show_menu=True)
 
