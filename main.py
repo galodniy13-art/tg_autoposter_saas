@@ -2848,7 +2848,7 @@ async def stylewizard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
-    text = (update.message.text or "").strip()
+    text = (update.message.text or update.message.caption or "").strip()
     if not text:
         return
 
@@ -3777,7 +3777,7 @@ def main() -> None:
     app.add_handler(CommandHandler("setchannels", setchannels_cmd))
     app.add_handler(CommandHandler("setinterval", setinterval_admin_cmd))
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_text_handler))
+    app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND, wizard_text_handler))
 
     app.run_polling(drop_pending_updates=True)
 
