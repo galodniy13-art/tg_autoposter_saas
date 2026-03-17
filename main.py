@@ -1959,14 +1959,31 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     rss_daily = int(cfg.get("rss_daily_limit", 0) or 0)
     creative_daily = int(cfg.get("creative_daily_limit", 0) or 0)
 
+    id_label = f"🆔 {ui_text(cfg, 'status_id')}:"
+    id_value = str(user_id)
     text = (
-        f"{ui_text(cfg, 'status_id')}: {user_id}\n"
-        f"{ui_text(cfg, 'status_channels')}:\n{channels_text}\n"
-        f"{ui_text(cfg, 'status_rss_daily')}: {rss_daily}\n"
-        f"{ui_text(cfg, 'status_creative_daily')}: {creative_daily}\n"
-        f"{ui_text(cfg, 'status_valid_until')}: {sub}"
+        f"{ui_text(cfg, 'status_title')}\n\n"
+        f"{id_label}\n{id_value}\n\n"
+        f"📺 {ui_text(cfg, 'status_channels')}:\n{channels_text}\n\n"
+        f"📰 {ui_text(cfg, 'status_rss_daily')}: {rss_daily}\n"
+        f"✨ {ui_text(cfg, 'status_creative_daily')}: {creative_daily}\n"
+        f"📅 {ui_text(cfg, 'status_valid_until')}: {sub}"
     )
-    await reply_ui(update, text, cfg, show_menu=True)
+    id_offset = len(ui_text(cfg, 'status_title')) + 2 + len(id_label) + 1
+    entities = [MessageEntity(type="code", offset=id_offset, length=len(id_value))]
+    markup = build_main_menu_clean(cfg)
+
+    if update.callback_query:
+        q = update.callback_query
+        await q.answer()
+        try:
+            await q.edit_message_text(text=text, entities=entities, reply_markup=markup)
+        except BadRequest:
+            await q.message.reply_text(text=text, entities=entities, reply_markup=markup)
+        return
+
+    if update.message:
+        await update.message.reply_text(text=text, entities=entities, reply_markup=markup)
 
 async def materials_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -2851,7 +2868,15 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 reply_markup=build_channel_picker(cfg, "rss_feeds", "ui:mode:rss:menu"),
             )
             return
-        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + ui_text(cfg, "feed_management_title") + "\n\n" + feeds_overview(cfg)
+        text = (
+            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            + "\n\n"
+            + ui_text(cfg, "feed_management_title")
+            + "\n"
+            + ui_text(cfg, "feed_management_help")
+            + "\n\n"
+            + feeds_overview(cfg)
+        )
         await q.answer()
         try:
             await q.edit_message_text(text=text, reply_markup=build_feed_menu(cfg))

@@ -79,6 +79,7 @@ TEXTS = {
         "preview_status_no_rss_image_text_only": "No usable RSS image was found. Showing text preview.",
         "preview_status_asset_load_failed_normal": "Could not load the template or watermark. Showing normal preview.",
         "feed_management_title": "🧾 Feed management:",
+        "feed_management_help": "Tip: Want to use an X/Twitter profile as a source? Convert the profile link to RSS at https://rss.app/ and paste the generated RSS link here.",
         "btn_lang": "🌐 Language",
         "choose_lang": "Choose your language:",
         "btn_setup": "🛠 Setup",
@@ -124,7 +125,7 @@ TEXTS = {
         "asset_manage_watermark_help": "Here you can manage your watermark.",
         "asset_manage_status": "Current status: {status}",
         "asset_prompt_send_template": "Send one image for the template/background (photo or image document).",
-        "asset_prompt_send_watermark": "Send one image for the watermark/logo (photo or image document). PNG with transparent background is recommended.",
+        "asset_prompt_send_watermark": "Send one image for the watermark/logo (photo or image document).\n\nTip: You can remove the background here: https://www.remove.bg/\nBest result: PNG, preferably sent as a document. A slightly transparent watermark usually looks better.",
         "asset_saved_template": "✅ Template image saved.",
         "asset_saved_watermark": "✅ Watermark saved.",
         "asset_deleted_template": "✅ Template image deleted.",
@@ -174,6 +175,7 @@ TEXTS = {
         "status_valid_until": "Subscription valid until",
         "status_not_set": "not set",
         "status_inactive": "inactive",
+        "status_title": "📊 Account status",
         "btn_setstyle": "✍️ Set style",
         "btn_showstyle": "📄 Show style",
         "btn_resetstyle": "♻️ Reset style",
@@ -263,14 +265,10 @@ TEXTS = {
         "channel_picker_empty": "No channels found yet. Add a channel first in Channel Management.",
         "channel_selected_now": "📌 Selected channel: {channel}",
         "start_welcome": (
-            "👋 Welcome to AI autoposting for influencers.\n\n"
-            "This bot helps you publish on Telegram using AI in two modes:\n"
-            "• RSS + AI — takes news from RSS and rewrites it in your style\n"
-            "• Creative — generates original expert/creator posts\n\n"
-            "Start here:\n"
-            "1) ⚙️ Setup\n"
-            "2) Connect channel (/setchannel @yourchannel)\n"
-            "3) Choose mode (/mode rss or /mode creator)"
+            "👋 Welcome to Postora.\n\n"
+            "I help you create and schedule posts for your Telegram channel.\n\n"
+            "To begin, open ⚙️ Setup, choose a mode, connect your channel, and configure your prompt, feeds, and schedule.\n"
+            "You can manage plans/payment separately anytime."
         ),
     },
     "ru": {
@@ -353,6 +351,7 @@ TEXTS = {
         "preview_status_no_rss_image_text_only": "У RSS-записи нет доступного изображения. Показываю текстовый вариант.",
         "preview_status_asset_load_failed_normal": "Не удалось загрузить шаблон или водяной знак. Показываю обычное превью.",
         "feed_management_title": "🧾 Управление лентами:",
+        "feed_management_help": "Подсказка: хотите использовать профиль X/Twitter как источник? Преобразуйте ссылку на профиль в RSS через https://rss.app/ и вставьте полученную RSS-ссылку сюда.",
         "btn_lang": "🌐 Язык",
         "choose_lang": "Выберите язык:",
         "btn_setup": "🛠 Настройка",
@@ -398,7 +397,7 @@ TEXTS = {
         "asset_manage_watermark_help": "Здесь можно управлять водяным знаком.",
         "asset_manage_status": "Текущий статус: {status}",
         "asset_prompt_send_template": "Отправьте одно изображение для шаблона/фона (как фото или документ-изображение).",
-        "asset_prompt_send_watermark": "Отправьте одно изображение для водяного знака/логотипа (как фото или документ-изображение). Рекомендуется PNG с прозрачным фоном.",
+        "asset_prompt_send_watermark": "Отправьте одно изображение для водяного знака/логотипа (как фото или документ-изображение).\n\nПодсказка: если нужно, фон можно удалить здесь: https://www.remove.bg/\nЛучше загружать PNG, желательно как файл (документ). Небольшая прозрачность обычно выглядит лучше.",
         "asset_saved_template": "✅ Шаблон сохранён.",
         "asset_saved_watermark": "✅ Водяной знак сохранён.",
         "asset_deleted_template": "✅ Шаблон удалён.",
@@ -448,6 +447,7 @@ TEXTS = {
         "status_valid_until": "Подписка активна до",
         "status_not_set": "не задано",
         "status_inactive": "не активна",
+        "status_title": "📊 Статус аккаунта",
         "btn_setstyle": "✍️ Стиль",
         "btn_showstyle": "📄 Показать стиль",
         "btn_resetstyle": "♻️ Сбросить стиль",
@@ -537,14 +537,10 @@ TEXTS = {
         "channel_picker_empty": "Каналы не найдены. Сначала добавьте канал в управлении каналами.",
         "channel_selected_now": "📌 Выбран канал: {channel}",
         "start_welcome": (
-            "👋 Добро пожаловать в AI-автопостинг для инфлюенсеров.\n\n"
-            "Бот помогает публиковать в Telegram с помощью ИИ в двух режимах:\n"
-            "• RSS + AI — берёт новости из RSS и переписывает в вашем стиле\n"
-            "• Creative — генерирует оригинальные экспертные/авторские посты\n\n"
-            "С чего начать:\n"
-            "1) ⚙️ Настройка\n"
-            "2) Подключите канал (/setchannel @вашканал)\n"
-            "3) Выберите режим (/mode rss или /mode creator)"
+            "👋 Добро пожаловать в Postora.\n\n"
+            "Я помогаю создавать и публиковать посты по расписанию для вашего Telegram-канала.\n\n"
+            "Чтобы начать, откройте ⚙️ Настройку, выберите режим, подключите канал и задайте промпт, ленты и расписание.\n"
+            "Тариф и оплату можно настроить отдельно в любое время."
         ),
     },
 }
