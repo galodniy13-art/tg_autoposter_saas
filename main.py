@@ -401,6 +401,8 @@ DEFAULT_CLIENT = {
     "interval_minutes": 30,
     "rss_use_interval": False,
     "creative_use_interval": False,
+    "rss_last_interval_run_at": None,
+    "creative_last_interval_run_at": None,
     "schedule_enabled": False,
     "schedule_times": [],
     "last_schedule_date": None,
@@ -472,6 +474,8 @@ CHANNEL_SCOPED_KEYS = (
     "interval_minutes",
     "rss_use_interval",
     "creative_use_interval",
+    "rss_last_interval_run_at",
+    "creative_last_interval_run_at",
     "creative_variation_level",
     "creative_post_types",
     "creative_avoid_repetition",
@@ -1926,13 +1930,31 @@ def should_run_mode_now(
         return True
 
     interval_min = int(cfg.get("interval_minutes", 30))
+    if interval_min <= 0:
+        interval_min = 30
     prev = last_post_at.get((user_id, channel, mode))
+    if not prev:
+        stored_key = "creative_last_interval_run_at" if mode == "creative" else "rss_last_interval_run_at"
+        stored_value = (cfg.get(stored_key) or "").strip()
+        if stored_value:
+            try:
+                prev = datetime.fromisoformat(stored_value)
+                if prev.tzinfo is not None:
+                    prev = prev.astimezone().replace(tzinfo=None)
+            except ValueError:
+                prev = None
+        if not prev:
+            cfg[stored_key] = now.isoformat(timespec="seconds")
+            save_client(user_id, cfg)
+            return False
     if prev and (now - prev).total_seconds() < interval_min * 60:
         return False
     return True
 
 
 def mark_mode_scheduled(cfg: dict, mode: str, now: datetime) -> None:
+    interval_key = "creative_last_interval_run_at" if mode == "creative" else "rss_last_interval_run_at"
+    cfg[interval_key] = now.isoformat(timespec="seconds")
     enabled, times, _, _ = mode_schedule_state(cfg, mode)
     if not (enabled and times):
         return
