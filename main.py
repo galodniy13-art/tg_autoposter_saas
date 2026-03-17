@@ -403,6 +403,8 @@ DEFAULT_CLIENT = {
     "creative_use_interval": False,
     "rss_last_interval_run_at": None,
     "creative_last_interval_run_at": None,
+    "rss_interval_next_run_at": None,
+    "creative_interval_next_run_at": None,
     "schedule_enabled": False,
     "schedule_times": [],
     "last_schedule_date": None,
@@ -476,6 +478,8 @@ CHANNEL_SCOPED_KEYS = (
     "creative_use_interval",
     "rss_last_interval_run_at",
     "creative_last_interval_run_at",
+    "rss_interval_next_run_at",
+    "creative_interval_next_run_at",
     "creative_variation_level",
     "creative_post_types",
     "creative_avoid_repetition",
@@ -1942,6 +1946,36 @@ def mode_uses_interval(cfg: dict, mode: str) -> bool:
     return not bool(enabled and times)
 
 
+def _parse_local_iso_datetime(value: str) -> datetime | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    return parsed
+
+
+def _interval_next_run_key(mode: str) -> str:
+    return "creative_interval_next_run_at" if mode == "creative" else "rss_interval_next_run_at"
+
+
+def _interval_last_run_key(mode: str) -> str:
+    return "creative_last_interval_run_at" if mode == "creative" else "rss_last_interval_run_at"
+
+
+def _schedule_next_interval_run(cfg: dict, mode: str, from_time: datetime) -> datetime:
+    interval_min = int(cfg.get("interval_minutes", 30) or 30)
+    if interval_min <= 0:
+        interval_min = 30
+    next_run = from_time + timedelta(minutes=interval_min)
+    cfg[_interval_next_run_key(mode)] = next_run.isoformat(timespec="seconds")
+    return next_run
+
+
 def should_run_mode_now(
     cfg: dict,
     mode: str,
@@ -1966,17 +2000,27 @@ def should_run_mode_now(
     interval_min = int(cfg.get("interval_minutes", 30))
     if interval_min <= 0:
         interval_min = 30
+
+    next_key = _interval_next_run_key(mode)
+    next_run = _parse_local_iso_datetime(cfg.get(next_key) or "")
+    if not next_run:
+        prev_key = _interval_last_run_key(mode)
+        prev_stored = _parse_local_iso_datetime(cfg.get(prev_key) or "")
+        if prev_stored:
+            next_run = prev_stored + timedelta(minutes=interval_min)
+            cfg[next_key] = next_run.isoformat(timespec="seconds")
+        else:
+            _schedule_next_interval_run(cfg, mode, now)
+            save_client(user_id, cfg)
+            return False
+
+    if next_run and now < next_run:
+        return False
+
     prev = last_post_at.get((user_id, channel, mode))
     if not prev:
-        stored_key = "creative_last_interval_run_at" if mode == "creative" else "rss_last_interval_run_at"
-        stored_value = (cfg.get(stored_key) or "").strip()
-        if stored_value:
-            try:
-                prev = datetime.fromisoformat(stored_value)
-                if prev.tzinfo is not None:
-                    prev = prev.astimezone().replace(tzinfo=None)
-            except ValueError:
-                prev = None
+        stored_key = _interval_last_run_key(mode)
+        prev = _parse_local_iso_datetime(cfg.get(stored_key) or "")
         if not prev:
             cfg[stored_key] = now.isoformat(timespec="seconds")
             save_client(user_id, cfg)
@@ -1987,8 +2031,9 @@ def should_run_mode_now(
 
 
 def mark_mode_scheduled(cfg: dict, mode: str, now: datetime) -> None:
-    interval_key = "creative_last_interval_run_at" if mode == "creative" else "rss_last_interval_run_at"
+    interval_key = _interval_last_run_key(mode)
     cfg[interval_key] = now.isoformat(timespec="seconds")
+    _schedule_next_interval_run(cfg, mode, now)
     enabled, times, _, _ = mode_schedule_state(cfg, mode)
     if not (enabled and times):
         return
@@ -4983,6 +5028,34 @@ async def on_startup(app: Application) -> None:
             "Не выдумывай факты.\n",
             encoding="utf-8",
         )
+
+    startup_now = datetime.now()
+    for p in CLIENTS_DIR.glob("*.json"):
+        try:
+            user_id = int(p.stem)
+        except Exception:
+            continue
+
+        cfg = load_client(user_id)
+        channels = get_saved_channels(cfg)
+        if not channels:
+            continue
+
+        changed = False
+        for channel in channels:
+            switch_active_channel(cfg, channel)
+            for mode in ("rss", "creative"):
+                if not mode_uses_interval(cfg, mode):
+                    continue
+                next_key = _interval_next_run_key(mode)
+                next_run = _parse_local_iso_datetime(cfg.get(next_key) or "")
+                if next_run and next_run > startup_now:
+                    continue
+                _schedule_next_interval_run(cfg, mode, startup_now)
+                changed = True
+
+        if changed:
+            save_client(user_id, cfg)
 
     # Start background task
     asyncio.create_task(autopost_loop(app))
