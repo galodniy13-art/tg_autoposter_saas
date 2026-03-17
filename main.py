@@ -364,6 +364,8 @@ DEFAULT_CLIENT = {
 
     "mode": "rss",  # "rss" or "creator"
     "creator_profile": "",
+    "rss_prompt": "",
+    "creative_prompt": "",
 
     "channel": None,
     "channels": [],
@@ -394,7 +396,11 @@ DEFAULT_CLIENT = {
     "creative_custom_emojis_link": "",
 
     "autopost_enabled": False,
+    "rss_autopost_enabled": False,
+    "creative_autopost_enabled": False,
     "interval_minutes": 30,
+    "rss_use_interval": False,
+    "creative_use_interval": False,
     "schedule_enabled": False,
     "schedule_times": [],
     "last_schedule_date": None,
@@ -428,6 +434,8 @@ DEFAULT_CLIENT = {
 }
 
 CHANNEL_SCOPED_KEYS = (
+    "rss_autopost_enabled",
+    "creative_autopost_enabled",
     "rss_prompt",
     "creative_prompt",
     "feeds",
@@ -461,6 +469,13 @@ CHANNEL_SCOPED_KEYS = (
     "creative_schedule_times",
     "creative_last_schedule_date",
     "creative_last_schedule_time",
+    "interval_minutes",
+    "rss_use_interval",
+    "creative_use_interval",
+    "creative_variation_level",
+    "creative_post_types",
+    "creative_avoid_repetition",
+    "creative_last_post_type_idx",
 )
 
 # ===================== Storage helpers =====================
@@ -555,14 +570,20 @@ def ensure_channel_settings(cfg: dict) -> dict:
     channel_settings = cfg.get("channel_settings")
     if not isinstance(channel_settings, dict):
         channel_settings = {}
+    has_existing_buckets = any(isinstance(v, dict) and v for v in channel_settings.values())
+    legacy_seed_channel = cfg.get("channel") if (not has_existing_buckets and cfg.get("channel")) else None
     for channel in cfg.get("channels", []):
         bucket = channel_settings.get(channel)
         if not isinstance(bucket, dict):
             bucket = {}
             channel_settings[channel] = bucket
+            if legacy_seed_channel and channel == legacy_seed_channel:
+                for key in CHANNEL_SCOPED_KEYS:
+                    if key in cfg:
+                        bucket[key] = _copy_scoped_value(cfg.get(key))
         for key in CHANNEL_SCOPED_KEYS:
-            if key not in bucket and key in cfg:
-                bucket[key] = _copy_scoped_value(cfg.get(key))
+            if key not in bucket and key in DEFAULT_CLIENT:
+                bucket[key] = _copy_scoped_value(DEFAULT_CLIENT.get(key))
     for channel in list(channel_settings.keys()):
         if channel not in cfg.get("channels", []):
             channel_settings.pop(channel, None)
@@ -590,6 +611,8 @@ def apply_active_channel_settings(cfg: dict) -> None:
     for key in CHANNEL_SCOPED_KEYS:
         if key in bucket:
             cfg[key] = _copy_scoped_value(bucket[key])
+        elif key in DEFAULT_CLIENT:
+            cfg[key] = _copy_scoped_value(DEFAULT_CLIENT.get(key))
 
 
 def switch_active_channel(cfg: dict, channel: str) -> None:
@@ -600,6 +623,31 @@ def switch_active_channel(cfg: dict, channel: str) -> None:
         persist_active_channel_settings(cfg)
     cfg["channel"] = channel
     apply_active_channel_settings(cfg)
+
+
+def mode_autopost_enabled(cfg: dict, mode: str) -> bool:
+    if mode == "creative":
+        if "creative_autopost_enabled" in cfg:
+            return bool(cfg.get("creative_autopost_enabled"))
+        return bool(cfg.get("autopost_enabled"))
+
+    if mode == "rss":
+        if "rss_autopost_enabled" in cfg:
+            return bool(cfg.get("rss_autopost_enabled"))
+        return bool(cfg.get("autopost_enabled"))
+
+    return mode_autopost_enabled(cfg, "rss") or mode_autopost_enabled(cfg, "creative")
+
+
+def set_mode_autopost_enabled(cfg: dict, mode: str, enabled: bool) -> None:
+    if mode == "creative":
+        cfg["creative_autopost_enabled"] = bool(enabled)
+    elif mode == "rss":
+        cfg["rss_autopost_enabled"] = bool(enabled)
+    else:
+        cfg["rss_autopost_enabled"] = bool(enabled)
+        cfg["creative_autopost_enabled"] = bool(enabled)
+    cfg["autopost_enabled"] = mode_autopost_enabled(cfg, "rss") or mode_autopost_enabled(cfg, "creative")
 
 # ===================== Utility =====================
 def is_admin(user_id: int) -> bool:
@@ -1613,7 +1661,9 @@ def build_help_text(cfg: dict) -> str:
 
 
 def build_setup_menu(cfg: dict) -> InlineKeyboardMarkup:
-    return build_setup_submenu(ui_pack(cfg), bool(cfg.get("autopost_enabled")))
+    current_mode = (cfg.get("mode") or "rss").strip().lower()
+    autopost_on = mode_autopost_enabled(cfg, "creative" if current_mode == "creator" else "rss")
+    return build_setup_submenu(ui_pack(cfg), autopost_on)
 
 
 def build_channel_menu(cfg: dict) -> InlineKeyboardMarkup:
@@ -4421,14 +4471,26 @@ async def interval_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def autoposton_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
-    cfg["autopost_enabled"] = True
+    mode = (cfg.get("mode") or "rss").strip().lower()
+    if mode == "creator":
+        set_mode_autopost_enabled(cfg, "creative", True)
+    elif mode == "rss":
+        set_mode_autopost_enabled(cfg, "rss", True)
+    else:
+        set_mode_autopost_enabled(cfg, "both", True)
     save_client(user_id, cfg)
     await reply_ui(update, "🤖 Autopost ON.", cfg, show_menu=True)
 
 async def autopostoff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
-    cfg["autopost_enabled"] = False
+    mode = (cfg.get("mode") or "rss").strip().lower()
+    if mode == "creator":
+        set_mode_autopost_enabled(cfg, "creative", False)
+    elif mode == "rss":
+        set_mode_autopost_enabled(cfg, "rss", False)
+    else:
+        set_mode_autopost_enabled(cfg, "both", False)
     save_client(user_id, cfg)
     await reply_ui(update, "🛑 Autopost OFF.", cfg, show_menu=True)
 
@@ -4700,8 +4762,6 @@ async def autopost_loop(app: Application) -> None:
 
                 cfg = load_client(user_id)
 
-                if not cfg.get("autopost_enabled"):
-                    continue
                 mode = cfg.get("mode")
                 required_mode = "creator" if mode == "creator" else "rss"
                 if not mode_access_allowed(cfg, required_mode):
@@ -4716,6 +4776,8 @@ async def autopost_loop(app: Application) -> None:
                 feeds = cfg.get("feeds", [])
 
                 if mode == "creator":
+                    if not mode_autopost_enabled(cfg, "creative"):
+                        continue
                     if not should_run_mode_now(cfg, "creative", now, last_post_at, user_id):
                         continue
                     msg = creator_make_post(user_id, cfg)
@@ -4728,10 +4790,28 @@ async def autopost_loop(app: Application) -> None:
                     continue
 
                 best = pick_newest_unseen(cfg) if feeds else None
+                rss_enabled = mode_autopost_enabled(cfg, "rss")
+                creative_enabled = mode_autopost_enabled(cfg, "creative")
 
                 if mode == "both" and not best:
+                    if not creative_enabled:
+                        continue
                     if should_log_diag(user_id, "no_fresh_rss_items", now):
                         logger.info("[autopost] user=%s mode=both: no fresh RSS items (none or already posted), fallback to creator", user_id)
+                    if not should_run_mode_now(cfg, "creative", now, last_post_at, user_id):
+                        continue
+                    msg = creator_make_post(user_id, cfg)
+                    creator_entities = apply_bold_title(msg, []) if bool(cfg.get("creative_bold_title", False)) else []
+                    await app.bot.send_message(chat_id=channel, text=msg, entities=creator_entities or None)
+                    bump_daily_count(cfg, "creator")
+                    mark_mode_scheduled(cfg, "creative", now)
+                    save_client(user_id, cfg)
+                    last_post_at[user_id] = now
+                    continue
+
+                if mode == "both" and best and not rss_enabled:
+                    if not creative_enabled:
+                        continue
                     if not should_run_mode_now(cfg, "creative", now, last_post_at, user_id):
                         continue
                     msg = creator_make_post(user_id, cfg)
@@ -4748,6 +4828,8 @@ async def autopost_loop(app: Application) -> None:
                         logger.info("[autopost] user=%s mode=rss: no fresh RSS items (feed has no new entries or all were deduped)", user_id)
                     continue
 
+                if not rss_enabled:
+                    continue
                 if not should_run_mode_now(cfg, "rss", now, last_post_at, user_id):
                     continue
 
