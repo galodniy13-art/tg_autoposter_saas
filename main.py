@@ -1844,7 +1844,9 @@ def mode_schedule_state(cfg: dict, mode: str) -> tuple[bool, list[str], str, str
         last_date = cfg.get("rss_last_schedule_date")
         last_time = cfg.get("rss_last_schedule_time")
 
-    if not mode_has_own_times and not times and cfg.get("schedule_times"):
+    channels = cfg.get("channels") if isinstance(cfg.get("channels"), list) else []
+    use_legacy_global_schedule = len(channels) <= 1
+    if use_legacy_global_schedule and not mode_has_own_times and not times and cfg.get("schedule_times"):
         enabled = bool(cfg.get("schedule_enabled"))
         times = cfg.get("schedule_times", []) or []
         last_date = cfg.get("last_schedule_date")
@@ -1867,7 +1869,14 @@ def mode_uses_interval(cfg: dict, mode: str) -> bool:
     return not bool(enabled and times)
 
 
-def should_run_mode_now(cfg: dict, mode: str, now: datetime, last_post_at: dict[int, datetime], user_id: int) -> bool:
+def should_run_mode_now(
+    cfg: dict,
+    mode: str,
+    now: datetime,
+    last_post_at: dict[tuple[int, str, str], datetime],
+    user_id: int,
+    channel: str,
+) -> bool:
     enabled, times, last_date, last_time = mode_schedule_state(cfg, mode)
     use_schedule = not mode_uses_interval(cfg, mode)
     if use_schedule:
@@ -1882,7 +1891,7 @@ def should_run_mode_now(cfg: dict, mode: str, now: datetime, last_post_at: dict[
         return True
 
     interval_min = int(cfg.get("interval_minutes", 30))
-    prev = last_post_at.get(user_id)
+    prev = last_post_at.get((user_id, channel, mode))
     if prev and (now - prev).total_seconds() < interval_min * 60:
         return False
     return True
@@ -4738,7 +4747,7 @@ async def setinterval_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TY
 
 # ===================== Autopost loop =====================
 async def autopost_loop(app: Application) -> None:
-    last_post_at: dict[int, datetime] = {}
+    last_post_at: dict[tuple[int, str, str], datetime] = {}
     last_diag_at: dict[tuple[int, str], datetime] = {}
 
     def should_log_diag(uid: int, reason: str, now: datetime, cooldown_minutes: int = 30) -> bool:
@@ -4769,85 +4778,87 @@ async def autopost_loop(app: Application) -> None:
                 if not can_post_more(cfg, required_mode):
                     continue
 
-                channel = cfg.get("channel")
-                if not channel:
+                channels = get_saved_channels(cfg)
+                if not channels:
                     continue
 
-                feeds = cfg.get("feeds", [])
+                for channel in channels:
+                    switch_active_channel(cfg, channel)
+                    feeds = cfg.get("feeds", [])
 
-                if mode == "creator":
-                    if not mode_autopost_enabled(cfg, "creative"):
+                    if mode == "creator":
+                        if not mode_autopost_enabled(cfg, "creative"):
+                            continue
+                        if not should_run_mode_now(cfg, "creative", now, last_post_at, user_id, channel):
+                            continue
+                        msg = creator_make_post(user_id, cfg)
+                        creator_entities = apply_bold_title(msg, []) if bool(cfg.get("creative_bold_title", False)) else []
+                        await app.bot.send_message(chat_id=channel, text=msg, entities=creator_entities or None)
+                        bump_daily_count(cfg, "creator")
+                        mark_mode_scheduled(cfg, "creative", now)
+                        save_client(user_id, cfg)
+                        last_post_at[(user_id, channel, "creative")] = now
                         continue
-                    if not should_run_mode_now(cfg, "creative", now, last_post_at, user_id):
+
+                    best = pick_newest_unseen(cfg) if feeds else None
+                    rss_enabled = mode_autopost_enabled(cfg, "rss")
+                    creative_enabled = mode_autopost_enabled(cfg, "creative")
+
+                    if mode == "both" and not best:
+                        if not creative_enabled:
+                            continue
+                        if should_log_diag(user_id, "no_fresh_rss_items", now):
+                            logger.info("[autopost] user=%s mode=both: no fresh RSS items (none or already posted), fallback to creator", user_id)
+                        if not should_run_mode_now(cfg, "creative", now, last_post_at, user_id, channel):
+                            continue
+                        msg = creator_make_post(user_id, cfg)
+                        creator_entities = apply_bold_title(msg, []) if bool(cfg.get("creative_bold_title", False)) else []
+                        await app.bot.send_message(chat_id=channel, text=msg, entities=creator_entities or None)
+                        bump_daily_count(cfg, "creator")
+                        mark_mode_scheduled(cfg, "creative", now)
+                        save_client(user_id, cfg)
+                        last_post_at[(user_id, channel, "creative")] = now
                         continue
-                    msg = creator_make_post(user_id, cfg)
-                    creator_entities = apply_bold_title(msg, []) if bool(cfg.get("creative_bold_title", False)) else []
-                    await app.bot.send_message(chat_id=channel, text=msg, entities=creator_entities or None)
-                    bump_daily_count(cfg, "creator")
-                    mark_mode_scheduled(cfg, "creative", now)
+
+                    if mode == "both" and best and not rss_enabled:
+                        if not creative_enabled:
+                            continue
+                        if not should_run_mode_now(cfg, "creative", now, last_post_at, user_id, channel):
+                            continue
+                        msg = creator_make_post(user_id, cfg)
+                        creator_entities = apply_bold_title(msg, []) if bool(cfg.get("creative_bold_title", False)) else []
+                        await app.bot.send_message(chat_id=channel, text=msg, entities=creator_entities or None)
+                        bump_daily_count(cfg, "creator")
+                        mark_mode_scheduled(cfg, "creative", now)
+                        save_client(user_id, cfg)
+                        last_post_at[(user_id, channel, "creative")] = now
+                        continue
+
+                    if not best:
+                        if should_log_diag(user_id, "no_fresh_rss_items", now):
+                            logger.info("[autopost] user=%s mode=rss: no fresh RSS items (feed has no new entries or all were deduped)", user_id)
+                        continue
+
+                    if not rss_enabled:
+                        continue
+                    if not should_run_mode_now(cfg, "rss", now, last_post_at, user_id, channel):
+                        continue
+
+                    _, title, link, src = best
+                    summary = extract_summary_for_link(src, link)
+                    msg = llm_generate_post(user_id, cfg, title, summary, link)
+                    image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
+                    send_image_url, temp_file = await prepare_rss_image_for_sending(app.bot, cfg, user_id, image_url)
+
+                    await send_rss_to_channel(app.bot, cfg, channel, msg, link, send_image_url, temp_file)
+
+                    cfg.setdefault("posted_urls", [])
+                    cfg["posted_urls"].append(link)
+                    cfg["posted_urls"] = cfg["posted_urls"][-int(cfg.get("max_dedupe", 1500)):]
+                    bump_daily_count(cfg, "rss")
+                    mark_mode_scheduled(cfg, "rss", now)
                     save_client(user_id, cfg)
-                    last_post_at[user_id] = now
-                    continue
-
-                best = pick_newest_unseen(cfg) if feeds else None
-                rss_enabled = mode_autopost_enabled(cfg, "rss")
-                creative_enabled = mode_autopost_enabled(cfg, "creative")
-
-                if mode == "both" and not best:
-                    if not creative_enabled:
-                        continue
-                    if should_log_diag(user_id, "no_fresh_rss_items", now):
-                        logger.info("[autopost] user=%s mode=both: no fresh RSS items (none or already posted), fallback to creator", user_id)
-                    if not should_run_mode_now(cfg, "creative", now, last_post_at, user_id):
-                        continue
-                    msg = creator_make_post(user_id, cfg)
-                    creator_entities = apply_bold_title(msg, []) if bool(cfg.get("creative_bold_title", False)) else []
-                    await app.bot.send_message(chat_id=channel, text=msg, entities=creator_entities or None)
-                    bump_daily_count(cfg, "creator")
-                    mark_mode_scheduled(cfg, "creative", now)
-                    save_client(user_id, cfg)
-                    last_post_at[user_id] = now
-                    continue
-
-                if mode == "both" and best and not rss_enabled:
-                    if not creative_enabled:
-                        continue
-                    if not should_run_mode_now(cfg, "creative", now, last_post_at, user_id):
-                        continue
-                    msg = creator_make_post(user_id, cfg)
-                    creator_entities = apply_bold_title(msg, []) if bool(cfg.get("creative_bold_title", False)) else []
-                    await app.bot.send_message(chat_id=channel, text=msg, entities=creator_entities or None)
-                    bump_daily_count(cfg, "creator")
-                    mark_mode_scheduled(cfg, "creative", now)
-                    save_client(user_id, cfg)
-                    last_post_at[user_id] = now
-                    continue
-
-                if not best:
-                    if should_log_diag(user_id, "no_fresh_rss_items", now):
-                        logger.info("[autopost] user=%s mode=rss: no fresh RSS items (feed has no new entries or all were deduped)", user_id)
-                    continue
-
-                if not rss_enabled:
-                    continue
-                if not should_run_mode_now(cfg, "rss", now, last_post_at, user_id):
-                    continue
-
-                _, title, link, src = best
-                summary = extract_summary_for_link(src, link)
-                msg = llm_generate_post(user_id, cfg, title, summary, link)
-                image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
-                send_image_url, temp_file = await prepare_rss_image_for_sending(app.bot, cfg, user_id, image_url)
-
-                await send_rss_to_channel(app.bot, cfg, channel, msg, link, send_image_url, temp_file)
-
-                cfg.setdefault("posted_urls", [])
-                cfg["posted_urls"].append(link)
-                cfg["posted_urls"] = cfg["posted_urls"][-int(cfg.get("max_dedupe", 1500)):]
-                bump_daily_count(cfg, "rss")
-                mark_mode_scheduled(cfg, "rss", now)
-                save_client(user_id, cfg)
-                last_post_at[user_id] = now
+                    last_post_at[(user_id, channel, "rss")] = now
 
         except Exception:
             logger.exception("[autopost] loop error")
