@@ -886,6 +886,79 @@ def extract_summary_for_link(feed_url: str, link_normalized: str, limit: int = 2
     return ""
 
 
+def extract_rss_context_for_link(feed_url: str, link_normalized: str, limit: int = 20) -> dict:
+    fp = feedparser.parse(feed_url)
+    entries = getattr(fp, "entries", []) or []
+    for e in entries[:limit]:
+        link = _entry_get(e, "link")
+        if not link:
+            continue
+        if normalize_url(link) != link_normalized:
+            continue
+        summary = clean_text(_entry_get(e, "summary", "") or _entry_get(e, "description", "") or "")
+        content_chunks = []
+        content = _entry_get(e, "content", []) or []
+        for item in content:
+            if isinstance(item, dict):
+                value = clean_text(item.get("value") or "")
+                if value:
+                    content_chunks.append(value)
+        content_text = clean_text("\n\n".join(content_chunks))
+
+        source_parts = []
+        source_data = _entry_get(e, "source")
+        if isinstance(source_data, dict):
+            source_parts.extend([source_data.get("title") or "", source_data.get("href") or ""])
+        elif source_data:
+            source_parts.append(str(source_data))
+        source_parts.extend([
+            _entry_get(e, "author", "") or "",
+            _entry_get(e, "publisher", "") or "",
+            _entry_get(e, "tags", "") or "",
+        ])
+        source_meta = clean_text(" | ".join([str(x) for x in source_parts if x]))
+
+        return {
+            "summary": summary,
+            "content": content_text,
+            "source_meta": source_meta,
+            "source_url": clean_text(link),
+        }
+    return {"summary": "", "content": "", "source_meta": "", "source_url": ""}
+
+
+def assess_rss_context(title: str, summary: str, content: str, source_meta: str, link: str, feed_url: str = "") -> tuple[bool, bool, str]:
+    title_c = clean_text(title)
+    summary_c = clean_text(summary)
+    content_c = clean_text(content)
+    source_c = clean_text(source_meta)
+    combined = clean_text("\n".join([title_c, summary_c, content_c]))
+    text_len = len(combined)
+    alpha_words = re.findall(r"[A-Za-zА-Яа-яЁё]{3,}", combined)
+    has_digits = bool(re.search(r"\d", combined))
+    has_mentions = bool(re.search(r"[@#]", combined))
+    vague_markers = re.findall(r"(?i)\b(link in bio|new post|story|watch this|check this|coming soon|more soon|stay tuned|new update)\b", combined)
+    social_signal = bool(re.search(r"(?i)(instagram|instagr\.am|twitter|x\.com|t\.co|facebook|tiktok)", " ".join([feed_url, link, source_c])))
+    low_info = text_len < 160 or len(alpha_words) < 18
+    very_vague = len(vague_markers) >= 2 or (has_mentions and len(alpha_words) < 22)
+    weak_context = low_info or (social_signal and (very_vague or not has_digits and len(alpha_words) < 30))
+    return weak_context, social_signal, combined[:1500]
+
+
+def build_rss_generation_input(feed_url: str, link: str, title: str) -> tuple[str, str, bool, bool]:
+    context_data = extract_rss_context_for_link(feed_url, link)
+    summary = context_data.get("summary") or ""
+    weak_context, social_source, source_context = assess_rss_context(
+        title,
+        summary,
+        context_data.get("content") or "",
+        context_data.get("source_meta") or "",
+        context_data.get("source_url") or link,
+        feed_url,
+    )
+    return summary, source_context, weak_context, social_source
+
+
 def _entry_get(entry, key, default=None):
     if isinstance(entry, dict):
         return entry.get(key, default)
@@ -924,10 +997,14 @@ def _is_too_small(width: int | None, height: int | None) -> bool:
 
 def _rss_image_quality_issue(img: Image.Image, image_url: str = "") -> str | None:
     w, h = img.size
-    if w < 180 or h < 180:
+    if w < 260 or h < 260:
         return "too_small_dim"
-    if w * h < 90000:
+    if w * h < 160000:
         return "too_small_area"
+
+    ratio = w / max(1, h)
+    if ratio < 0.62 or ratio > 2.8:
+        return "extreme_aspect_ratio"
 
     max_side = max(w, h)
     min_side = min(w, h)
@@ -1253,10 +1330,27 @@ def _compose_rss_image_with_status(template_path: Path, rss_image_url: str, wate
         area_w = max(1, canvas_w - 2 * margin_x)
         area_h = max(1, canvas_h - 2 * margin_y)
 
-        scale = min(area_w / max(1, rss_img.width), area_h / max(1, rss_img.height))
-        fitted_w = max(1, int(rss_img.width * scale))
-        fitted_h = max(1, int(rss_img.height * scale))
-        fitted = rss_img.resize((fitted_w, fitted_h), Image.Resampling.LANCZOS)
+        source_ratio = rss_img.width / max(1, rss_img.height)
+        if source_ratio < 0.75:
+            return None, "rss_image_rejected"
+
+        if source_ratio >= 0.95 and source_ratio <= 1.9:
+            scale = max(area_w / max(1, rss_img.width), area_h / max(1, rss_img.height))
+            fitted_w = max(1, int(rss_img.width * scale))
+            fitted_h = max(1, int(rss_img.height * scale))
+            fitted = rss_img.resize((fitted_w, fitted_h), Image.Resampling.LANCZOS)
+            crop_x = max(0, (fitted_w - area_w) // 2)
+            crop_y = max(0, (fitted_h - area_h) // 2)
+            fitted = fitted.crop((crop_x, crop_y, crop_x + area_w, crop_y + area_h))
+            fitted_w, fitted_h = area_w, area_h
+        else:
+            scale = min(area_w / max(1, rss_img.width), area_h / max(1, rss_img.height))
+            fitted_w = max(1, int(rss_img.width * scale))
+            fitted_h = max(1, int(rss_img.height * scale))
+            filled_area = (fitted_w * fitted_h) / max(1, area_w * area_h)
+            if filled_area < 0.62:
+                return None, "rss_image_rejected"
+            fitted = rss_img.resize((fitted_w, fitted_h), Image.Resampling.LANCZOS)
         paste_x = margin_x + max(0, (area_w - fitted_w) // 2)
         paste_y = margin_y + max(0, (area_h - fitted_h) // 2)
         base.paste(fitted, (paste_x, paste_y), fitted)
@@ -1352,13 +1446,25 @@ async def prepare_rss_preview_image_for_sending(bot, cfg: dict, user_id: int, im
     return str(composed_path), composed_path, None
 
 # ===================== LLM providers =====================
-def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str) -> str:
+def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str, source_context: str = "", weak_context: bool = False, social_source: bool = False) -> str:
     style_prompt = get_mode_prompt(user_id, cfg, "rss")
     title = clean_text(title)
     summary = clean_text(summary)
 
     include_source_link = bool(cfg.get("include_rss_source_link", True))
     source_block = f"Source URL: {link}\n" if include_source_link else ""
+    weak_context_rules = ""
+    if weak_context:
+        weak_context_rules = (
+            "Context is weak or ambiguous. Use a cautious short summary style. "
+            "State only what is explicitly present in title/summary/content. "
+            "Do not infer hidden events or motives. Avoid confident specifics.\n"
+        )
+    if social_source:
+        weak_context_rules += (
+            "If this looks like a social update with thin context, keep it grounded and neutral. "
+            "Do not pretend to understand media/story context that is not described in text.\n"
+        )
 
     prompt = (
         style_prompt + "\n\n"
@@ -1368,7 +1474,9 @@ def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link
         "Return plain Telegram-ready text (no JSON, no code blocks). Preserve requested paragraph spacing and formatting.\n\n"
         f"Title: {title}\n"
         f"Summary: {summary}\n"
+        f"Source content: {source_context[:1500]}\n"
         f"{source_block}"
+        f"{weak_context_rules}"
         f"{emoji_style_note(cfg, 'rss')}"
     )
 
@@ -1379,7 +1487,7 @@ def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link
     txt = data.get("response", "")
     return sanitize_llm_post(txt, cfg, link)
 
-def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str) -> str:
+def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str, source_context: str = "", weak_context: bool = False, social_source: bool = False) -> str:
     logger.info(
         "openai_compat_generate_post entered for user %s (api_key_present=%s, base_url=%s, model=%s)",
         user_id,
@@ -1396,15 +1504,28 @@ def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: st
 
     include_source_link = bool(cfg.get("include_rss_source_link", True))
     source_block = f"Source URL: {link}\n" if include_source_link else ""
+    weak_context_rules = ""
+    if weak_context:
+        weak_context_rules = (
+            "Context is weak/ambiguous. Write a shorter, cautious update and only use explicit source facts. "
+            "No assumptions, no invented details, no fake certainty.\n"
+        )
+    if social_source:
+        weak_context_rules += (
+            "For social-style vague posts: stay neutral and grounded in available text only; "
+            "do not infer unseen story/media details.\n"
+        )
 
     user_content = (
         f"Title: {title}\n"
         f"Summary: {summary}\n"
+        f"Source content: {source_context[:1500]}\n"
         f"{source_block}\n"
         "You are a Telegram editor. Rewrite naturally and clearly for Telegram; avoid robotic wording.\n"
         "Use only facts from the source content. Do not invent details.\n"
         "Do not include source attribution, usernames, raw metadata, or links unless explicitly requested in the prompt/output settings.\n"
         "Return plain Telegram-ready text (no JSON, no code blocks). Preserve requested paragraph spacing and formatting."
+        f"\n{weak_context_rules}"
         f"\n{emoji_style_note(cfg, 'rss')}"
     )
 
@@ -1435,11 +1556,11 @@ def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: st
         raise
     return sanitize_llm_post(txt, cfg, link)
 
-def llm_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str) -> str:
+def llm_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str, source_context: str = "", weak_context: bool = False, social_source: bool = False) -> str:
     logger.info("llm_generate_post provider=%s for user %s", LLM_PROVIDER, user_id)
     if LLM_PROVIDER == "openai_compat":
-        return openai_compat_generate_post(user_id, cfg, title, summary, link)
-    return ollama_generate_post(user_id, cfg, title, summary, link)
+        return openai_compat_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
+    return ollama_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
 
 
 def detect_builder_requested_language(requested_language_raw: str) -> str:
@@ -2136,8 +2257,8 @@ async def rss_preview_text(bot, user_id: int, cfg: dict) -> tuple[str, str | Non
     if not best:
         return "No new items found (or everything already posted).", None, [], None
     _, title, link, src = best
-    summary = extract_summary_for_link(src, link)
-    msg = llm_generate_post(user_id, cfg, title, summary, link)
+    summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
+    msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
     image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
     text, entities = build_rss_message_payload(cfg, msg, link)
     preview_prefix = "🧪 Preview:\n\n"
@@ -2745,7 +2866,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     await q.message.reply_text("No new items found (or everything already posted).", reply_markup=build_rss_submenu(cfg))
                     return
                 _, title, link, src = best
-                summary = extract_summary_for_link(src, link)
+                summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
                 image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
             except Exception:
                 logger.exception("preview rss stage failed for user %s", user_id)
@@ -2756,7 +2877,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 return
 
             try:
-                msg = llm_generate_post(user_id, cfg, title, summary, link)
+                msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
             except Exception:
                 logger.exception("preview ai stage failed for user %s", user_id)
                 await q.message.reply_text(
@@ -4474,8 +4595,8 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await update.message.reply_text("🧪 Preview (creator):\n\n" + creator_msg, entities=_load_message_entities([_message_entity_to_dict(e) for e in creator_entities], offset_shift=len("🧪 Preview (creator):\n\n")) or None, reply_markup=build_main_menu_clean(cfg))
             return
         _, title, link, src = best
-        summary = extract_summary_for_link(src, link)
-        rss_msg = llm_generate_post(user_id, cfg, title, summary, link)
+        summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
+        rss_msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
         rss_preview = format_rss_message(cfg, rss_msg, link)
         await reply_ui(update, "🧪 Preview (RSS):\n\n" + rss_preview + "\n\n————\n🧪 Preview (Creator):\n\n" + creator_msg, cfg, show_menu=True)
         return
@@ -4545,8 +4666,8 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         best = pick_newest_unseen(cfg) if feeds else None
         if best:
             _, title, link, src = best
-            summary = extract_summary_for_link(src, link)
-            msg = llm_generate_post(user_id, cfg, title, summary, link)
+            summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
+            msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
             image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
             send_image_url, temp_file = await prepare_rss_image_for_sending(context.bot, cfg, user_id, image_url)
             await send_rss_to_channel(context.bot, cfg, channel, msg, link, send_image_url, temp_file)
@@ -4576,8 +4697,8 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     _, title, link, src = best
-    summary = extract_summary_for_link(src, link)
-    msg = llm_generate_post(user_id, cfg, title, summary, link)
+    summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
+    msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
     image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
     send_image_url, temp_file = await prepare_rss_image_for_sending(context.bot, cfg, user_id, image_url)
 
@@ -4978,8 +5099,8 @@ async def autopost_loop(app: Application) -> None:
                         continue
 
                     _, title, link, src = best
-                    summary = extract_summary_for_link(src, link)
-                    msg = llm_generate_post(user_id, cfg, title, summary, link)
+                    summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
+                    msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
                     image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
                     send_image_url, temp_file = await prepare_rss_image_for_sending(app.bot, cfg, user_id, image_url)
 
