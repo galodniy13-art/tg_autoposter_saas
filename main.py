@@ -105,7 +105,13 @@ if _raw_admins:
 # LLM provider:
 # - ollama (local)
 # - openai_compat (DeepSeek / OpenRouter / any OpenAI-compatible)
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai_compat").strip().lower()
+_raw_llm_provider = os.getenv("LLM_PROVIDER", "openai_compat").strip().lower()
+if _raw_llm_provider in {"deepseek", "openai", "deepseek_compat"}:
+    LLM_PROVIDER = "openai_compat"
+elif _raw_llm_provider in {"openai_compat", "ollama"}:
+    LLM_PROVIDER = _raw_llm_provider
+else:
+    LLM_PROVIDER = "openai_compat"
 
 # Ollama settings
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/generate").strip()
@@ -1169,6 +1175,13 @@ def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link
     return sanitize_llm_post(txt, cfg, link)
 
 def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str) -> str:
+    logger.info(
+        "openai_compat_generate_post entered for user %s (api_key_present=%s, base_url=%s, model=%s)",
+        user_id,
+        "yes" if bool(OPENAI_API_KEY) else "no",
+        OPENAI_BASE_URL,
+        OPENAI_MODEL,
+    )
     if not OPENAI_API_KEY:
         raise RuntimeError("DEEPSEEK_API_KEY missing (set it in host variables)")
 
@@ -1200,13 +1213,24 @@ def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: st
         "temperature": 0.7,
     }
 
-    r = requests.post(url, headers=headers, json=payload, timeout=60)
-    r.raise_for_status()
-    data = r.json()
-    txt = data["choices"][0]["message"]["content"]
+    try:
+        logger.info("openai_compat_generate_post sending request to %s", url)
+        r = requests.post(url, headers=headers, json=payload, timeout=60)
+        r.raise_for_status()
+        data = r.json()
+        txt = data["choices"][0]["message"]["content"]
+    except Exception as exc:
+        logger.exception(
+            "openai_compat_generate_post failed for user %s (%s: %s)",
+            user_id,
+            exc.__class__.__name__,
+            exc,
+        )
+        raise
     return sanitize_llm_post(txt, cfg, link)
 
 def llm_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str) -> str:
+    logger.info("llm_generate_post provider=%s for user %s", LLM_PROVIDER, user_id)
     if LLM_PROVIDER == "openai_compat":
         return openai_compat_generate_post(user_id, cfg, title, summary, link)
     return ollama_generate_post(user_id, cfg, title, summary, link)
