@@ -269,8 +269,14 @@ def build_feed_management_menu(labels: dict) -> InlineKeyboardMarkup:
 def build_feed_delete_menu(labels: dict, feeds: list) -> InlineKeyboardMarkup:
     rows = []
     for idx, feed in enumerate(feeds, start=1):
-        url = feed.get("url", "") if isinstance(feed, dict) else str(feed or "")
-        short = (url[:45] + "…") if len(url) > 46 else url
-        rows.append([InlineKeyboardButton(f"❌ {idx}. {short}", callback_data=f"ui:delfeed:{idx}")])
+        if isinstance(feed, dict):
+            name = str(feed.get("name", "")).strip()
+            url = str(feed.get("url", "")).strip()
+        else:
+            name = ""
+            url = str(feed or "")
+        short = (url[:33] + "…") if len(url) > 34 else url
+        title = f"{name} — {short}" if name else short
+        rows.append([InlineKeyboardButton(f"❌ {idx}. {title}", callback_data=f"ui:delfeed:{idx}")])
     rows.append([InlineKeyboardButton(labels["btn_back"], callback_data="ui:rss:feeds")])
     return InlineKeyboardMarkup(rows)
