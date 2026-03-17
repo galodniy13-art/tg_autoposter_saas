@@ -731,6 +731,23 @@ def sanitize_llm_post(text: str, cfg: dict, link: str) -> str:
 
     return t[:900]
 
+
+def _feed_url(feed_entry) -> str:
+    if isinstance(feed_entry, dict):
+        return str(feed_entry.get("url") or "").strip()
+    return str(feed_entry or "").strip()
+
+
+def _feed_name(feed_entry) -> str:
+    if isinstance(feed_entry, dict):
+        return str(feed_entry.get("name") or "").strip()
+    return ""
+
+
+def _find_feed_by_url(feeds: list, url: str) -> bool:
+    target = (url or "").strip()
+    return any(_feed_url(item) == target for item in feeds)
+
 # ===================== RSS helpers =====================
 def pick_newest_unseen(cfg: dict):
     feeds = cfg.get("feeds", [])
@@ -738,7 +755,10 @@ def pick_newest_unseen(cfg: dict):
     best = None  # (published, title, link_normalized, feed_url)
 
     per_feed = int(cfg.get("fetch_entries_per_feed", 15))
-    for feed_url in feeds:
+    for feed_entry in feeds:
+        feed_url = _feed_url(feed_entry)
+        if not feed_url:
+            continue
         fp = feedparser.parse(feed_url)
         entries = getattr(fp, "entries", []) or []
         for e in entries[:per_feed]:
@@ -1877,7 +1897,12 @@ def feeds_overview(cfg: dict) -> str:
     feeds = cfg.get("feeds", [])
     if not feeds:
         return ui_text(cfg, "feeds_empty")
-    return "🧾 Feeds:\n" + "\n".join([f"{i+1}) {u}" for i, u in enumerate(feeds)])
+    lines = []
+    for i, item in enumerate(feeds, start=1):
+        url = _feed_url(item)
+        name = _feed_name(item)
+        lines.append(f"{i}) {name} — {url}" if name else f"{i}) {url}")
+    return "🧾 Feeds:\n" + "\n".join(lines)
 
 
 def build_feeds_delete_menu(cfg: dict) -> InlineKeyboardMarkup:
@@ -3320,7 +3345,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:addfeed":
-        context.user_data["awaiting_feed_add"] = True
+        context.user_data["awaiting_feed_add"] = "url"
+        context.user_data.pop("pending_feed_url", None)
         await q.answer()
         await q.message.reply_text(tr(cfg, "ui_addfeed") + "\n\n" + feeds_overview(cfg))
         return
@@ -3907,20 +3933,35 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if context.user_data.get("awaiting_feed_add"):
-        context.user_data.pop("awaiting_feed_add", None)
-        url = text
+        stage = context.user_data.get("awaiting_feed_add")
+        if stage == "name":
+            context.user_data.pop("awaiting_feed_add", None)
+            url = context.user_data.pop("pending_feed_url", "").strip()
+            if not url:
+                await send_menu(update, cfg, "Feed add was canceled. Please add feed again.")
+                return
+            feed_name = "" if text == "-" else text
+            feeds = cfg.get("feeds", [])
+            feeds.append({"url": url, "name": feed_name} if feed_name else url)
+            cfg["feeds"] = feeds
+            save_client(user_id, cfg)
+            await send_menu(update, cfg, ui_text(cfg, "feed_added") + "\n\n" + feeds_overview(cfg))
+            return
+
+        context.user_data["awaiting_feed_add"] = "name"
+        url = text.strip()
         feeds = cfg.get("feeds", [])
-        if url in feeds:
+        if _find_feed_by_url(feeds, url):
+            context.user_data.pop("awaiting_feed_add", None)
             await send_menu(update, cfg, "Already added.")
             return
         fp = feedparser.parse(url)
         if not getattr(fp, "entries", None):
+            context.user_data.pop("awaiting_feed_add", None)
             await send_menu(update, cfg, "Feed read failed (no entries). Check the URL.")
             return
-        feeds.append(url)
-        cfg["feeds"] = feeds
-        save_client(user_id, cfg)
-        await send_menu(update, cfg, ui_text(cfg, "feed_added") + "\n\n" + feeds_overview(cfg))
+        context.user_data["pending_feed_url"] = url
+        await update.message.reply_text(ui_text(cfg, "feed_name_prompt"))
         return
 
     state = context.user_data.get("style_wizard")
@@ -4016,7 +4057,7 @@ async def addfeed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     url = context.args[0].strip()
     feeds = cfg.get("feeds", [])
 
-    if url in feeds:
+    if _find_feed_by_url(feeds, url):
         await update.message.reply_text("Already added.")
         return
 
@@ -4074,9 +4115,12 @@ async def delfeed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     removed = feeds.pop(idx)
+    removed_url = _feed_url(removed)
+    removed_name = _feed_name(removed)
+    removed_display = f"{removed_name} — {removed_url}" if removed_name else removed_url
     cfg["feeds"] = feeds
     save_client(user_id, cfg)
-    await send_menu(update, cfg, f"✅ Deleted feed:\n{removed}\n\n{feeds_overview(cfg)}")
+    await send_menu(update, cfg, f"✅ Deleted feed:\n{removed_display}\n\n{feeds_overview(cfg)}")
 
 async def clearfeeds_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
