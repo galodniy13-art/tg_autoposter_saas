@@ -250,6 +250,7 @@ def build_mode_schedule_menu(labels: dict, mode: str, enabled: bool, use_interva
             [InlineKeyboardButton(mode_label, callback_data=f"ui:schedule:{mode}:switch_mode")],
             [InlineKeyboardButton(labels["btn_schedule_edit"], callback_data=f"ui:schedule:{mode}:edit")],
             [InlineKeyboardButton(labels["btn_schedule_edit_interval"], callback_data=f"ui:schedule:{mode}:interval")],
+            [InlineKeyboardButton(labels["btn_schedule_quiet_hours"], callback_data=f"ui:schedule:{mode}:quiet")],
             [InlineKeyboardButton(toggle_label, callback_data=f"ui:schedule:{mode}:toggle")],
             [InlineKeyboardButton(labels["btn_back"], callback_data=f"ui:mode:{mode}:menu")],
         ]
