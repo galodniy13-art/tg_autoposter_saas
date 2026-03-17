@@ -405,6 +405,10 @@ DEFAULT_CLIENT = {
     "creative_last_interval_run_at": None,
     "rss_interval_next_run_at": None,
     "creative_interval_next_run_at": None,
+    "rss_quiet_hours_start": "",
+    "rss_quiet_hours_end": "",
+    "creative_quiet_hours_start": "",
+    "creative_quiet_hours_end": "",
     "schedule_enabled": False,
     "schedule_times": [],
     "last_schedule_date": None,
@@ -480,6 +484,10 @@ CHANNEL_SCOPED_KEYS = (
     "creative_last_interval_run_at",
     "rss_interval_next_run_at",
     "creative_interval_next_run_at",
+    "rss_quiet_hours_start",
+    "rss_quiet_hours_end",
+    "creative_quiet_hours_start",
+    "creative_quiet_hours_end",
     "creative_variation_level",
     "creative_post_types",
     "creative_avoid_repetition",
@@ -2056,7 +2064,13 @@ def schedule_summary_for_mode(cfg: dict, mode: str) -> str:
     enabled, times, _, _ = mode_schedule_state(cfg, mode)
     status = "ON" if enabled else "OFF"
     times_text = ", ".join(times) if times else "(empty)"
-    return f"Status: {status}\nTimes: {times_text}"
+    start_key, end_key = _quiet_hours_keys(mode)
+    quiet_start = str(cfg.get(start_key) or "").strip()
+    quiet_end = str(cfg.get(end_key) or "").strip()
+    quiet_text = f"{quiet_start}–{quiet_end}" if quiet_start and quiet_end else "OFF"
+    next_run = _parse_local_iso_datetime(cfg.get(_interval_next_run_key(mode)) or "")
+    next_text = next_run.strftime("%Y-%m-%d %H:%M") if next_run else "not set"
+    return f"Status: {status}\nTimes: {times_text}\nQuiet hours: {quiet_text}\nNext interval run: {next_text}"
 
 
 def mode_uses_interval(cfg: dict, mode: str) -> bool:
@@ -2088,11 +2102,55 @@ def _interval_last_run_key(mode: str) -> str:
     return "creative_last_interval_run_at" if mode == "creative" else "rss_last_interval_run_at"
 
 
+def _quiet_hours_keys(mode: str) -> tuple[str, str]:
+    if mode == "creative":
+        return "creative_quiet_hours_start", "creative_quiet_hours_end"
+    return "rss_quiet_hours_start", "rss_quiet_hours_end"
+
+
+def _parse_hhmm(value: str) -> tuple[int, int] | None:
+    raw = (value or "").strip()
+    if not re.fullmatch(r"\d{2}:\d{2}", raw):
+        return None
+    hh, mm = raw.split(":", 1)
+    h = int(hh)
+    m = int(mm)
+    if h > 23 or m > 59:
+        return None
+    return h, m
+
+
+def _quiet_window_for_day(start_hm: tuple[int, int], end_hm: tuple[int, int], now: datetime) -> tuple[datetime, datetime]:
+    start_dt = now.replace(hour=start_hm[0], minute=start_hm[1], second=0, microsecond=0)
+    end_dt = now.replace(hour=end_hm[0], minute=end_hm[1], second=0, microsecond=0)
+    if start_dt <= end_dt:
+        return start_dt, end_dt
+    if now >= start_dt:
+        return start_dt, end_dt + timedelta(days=1)
+    return start_dt - timedelta(days=1), end_dt
+
+
+def _apply_quiet_hours(cfg: dict, mode: str, candidate: datetime) -> datetime:
+    start_key, end_key = _quiet_hours_keys(mode)
+    start_hm = _parse_hhmm(str(cfg.get(start_key) or ""))
+    end_hm = _parse_hhmm(str(cfg.get(end_key) or ""))
+    if not start_hm or not end_hm:
+        return candidate
+    if start_hm == end_hm:
+        return candidate
+
+    start_dt, end_dt = _quiet_window_for_day(start_hm, end_hm, candidate)
+    if start_dt <= candidate < end_dt:
+        return end_dt
+    return candidate
+
+
 def _schedule_next_interval_run(cfg: dict, mode: str, from_time: datetime) -> datetime:
     interval_min = int(cfg.get("interval_minutes", 30) or 30)
     if interval_min <= 0:
         interval_min = 30
     next_run = from_time + timedelta(minutes=interval_min)
+    next_run = _apply_quiet_hours(cfg, mode, next_run)
     cfg[_interval_next_run_key(mode)] = next_run.isoformat(timespec="seconds")
     return next_run
 
@@ -2111,11 +2169,37 @@ def should_run_mode_now(
         if not enabled or not times:
             return False
         now_slot = now.strftime("%H:%M")
-        if now_slot not in set(times):
+        due_slot = None
+        times_set = set(times)
+        if now_slot in times_set:
+            due_slot = now_slot
+        else:
+            start_key, end_key = _quiet_hours_keys(mode)
+            start_hm = _parse_hhmm(str(cfg.get(start_key) or ""))
+            end_hm = _parse_hhmm(str(cfg.get(end_key) or ""))
+            if start_hm and end_hm and start_hm != end_hm and (now.hour, now.minute) == end_hm:
+                start_min = start_hm[0] * 60 + start_hm[1]
+                end_min = end_hm[0] * 60 + end_hm[1]
+                def in_quiet(slot_min: int) -> bool:
+                    if start_min < end_min:
+                        return start_min <= slot_min < end_min
+                    return slot_min >= start_min or slot_min < end_min
+                quiet_slots = []
+                for slot in sorted(times_set):
+                    hm = _parse_hhmm(slot)
+                    if not hm:
+                        continue
+                    slot_min = hm[0] * 60 + hm[1]
+                    if in_quiet(slot_min):
+                        quiet_slots.append(slot)
+                if quiet_slots:
+                    due_slot = quiet_slots[-1]
+        if not due_slot:
             return False
         today = str(date.today())
-        if last_date == today and last_time == now_slot:
+        if last_date == today and last_time == due_slot:
             return False
+        cfg[f"{mode}_scheduled_due_slot"] = due_slot
         return True
 
     interval_min = int(cfg.get("interval_minutes", 30))
@@ -2129,14 +2213,21 @@ def should_run_mode_now(
         prev_stored = _parse_local_iso_datetime(cfg.get(prev_key) or "")
         if prev_stored:
             next_run = prev_stored + timedelta(minutes=interval_min)
+            next_run = _apply_quiet_hours(cfg, mode, next_run)
             cfg[next_key] = next_run.isoformat(timespec="seconds")
         else:
             _schedule_next_interval_run(cfg, mode, now)
             save_client(user_id, cfg)
             return False
 
-    if next_run and now < next_run:
-        return False
+    if next_run:
+        adjusted_next_run = _apply_quiet_hours(cfg, mode, next_run)
+        if adjusted_next_run != next_run:
+            cfg[next_key] = adjusted_next_run.isoformat(timespec="seconds")
+            save_client(user_id, cfg)
+            return False
+        if now < next_run:
+            return False
 
     prev = last_post_at.get((user_id, channel, mode))
     if not prev:
@@ -2150,7 +2241,6 @@ def should_run_mode_now(
         return False
     return True
 
-
 def mark_mode_scheduled(cfg: dict, mode: str, now: datetime) -> None:
     interval_key = _interval_last_run_key(mode)
     cfg[interval_key] = now.isoformat(timespec="seconds")
@@ -2158,13 +2248,15 @@ def mark_mode_scheduled(cfg: dict, mode: str, now: datetime) -> None:
     enabled, times, _, _ = mode_schedule_state(cfg, mode)
     if not (enabled and times):
         return
+    due_slot = str(cfg.pop(f"{mode}_scheduled_due_slot", "") or "").strip()
+    if not due_slot:
+        due_slot = now.strftime("%H:%M")
     if mode == "creative":
         cfg["creative_last_schedule_date"] = str(date.today())
-        cfg["creative_last_schedule_time"] = now.strftime("%H:%M")
+        cfg["creative_last_schedule_time"] = due_slot
     else:
         cfg["rss_last_schedule_date"] = str(date.today())
-        cfg["rss_last_schedule_time"] = now.strftime("%H:%M")
-
+        cfg["rss_last_schedule_time"] = due_slot
 
 def build_mode_schedule_submenu(cfg: dict, mode: str) -> InlineKeyboardMarkup:
     enabled, _, _, _ = mode_schedule_state(cfg, mode)
@@ -2184,6 +2276,8 @@ def schedule_mode_menu_text(cfg: dict, mode: str) -> str:
         + ui_text(cfg, "schedule_posting_mode").format(mode=posting_mode)
         + "\n"
         + ui_text(cfg, "schedule_interval_current").format(interval=interval_min)
+        + "\n"
+        + ui_text(cfg, "schedule_timezone")
         + "\n\n"
         + ui_text(cfg, "schedule_current").format(schedule=schedule_summary_for_mode(cfg, mode))
     )
@@ -3043,6 +3137,10 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
         key = f"{mode}_use_interval"
         cfg[key] = not mode_uses_interval(cfg, mode)
+        if cfg[key]:
+            next_key = _interval_next_run_key(mode)
+            if not _parse_local_iso_datetime(cfg.get(next_key) or ""):
+                _schedule_next_interval_run(cfg, mode, datetime.now())
         save_client(user_id, cfg)
         notice = ui_text(cfg, "posting_mode_interval_set") if cfg[key] else ui_text(cfg, "posting_mode_scheduled_set")
         await q.answer()
@@ -3074,6 +3172,31 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             ui_text(cfg, "channel_selected_now").format(channel=selected)
             + "\n\n"
             + ui_text(cfg, "interval_input_instructions"),
+            reply_markup=build_mode_schedule_submenu(cfg, mode),
+        )
+        return
+
+    if data in ("ui:schedule:rss:quiet", "ui:schedule:creative:quiet"):
+        mode = "creative" if data.endswith("creative:quiet") else "rss"
+        action = "schedule_creative_quiet" if mode == "creative" else "schedule_rss_quiet"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, action, f"ui:schedule:{mode}:menu"),
+            )
+            return
+        context.user_data["awaiting_quiet_mode"] = mode
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            + "\n\n"
+            + ui_text(cfg, "quiet_hours_input_instructions"),
             reply_markup=build_mode_schedule_submenu(cfg, mode),
         )
         return
@@ -4356,11 +4479,47 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         cfg["interval_minutes"] = minutes
         cfg[f"{awaiting_interval_mode}_use_interval"] = True
+        _schedule_next_interval_run(cfg, awaiting_interval_mode, datetime.now())
         save_client(user_id, cfg)
         context.user_data.pop("awaiting_interval_mode", None)
         await update.message.reply_text(
             ui_text(cfg, "interval_saved").format(interval=minutes) + "\n\n" + schedule_mode_menu_text(cfg, awaiting_interval_mode),
             reply_markup=build_mode_schedule_submenu(cfg, awaiting_interval_mode),
+        )
+        return
+
+    awaiting_quiet_mode = context.user_data.get("awaiting_quiet_mode")
+    if awaiting_quiet_mode:
+        if text.lower() == "cancel":
+            context.user_data.pop("awaiting_quiet_mode", None)
+            await update.message.reply_text(
+                schedule_mode_menu_text(cfg, awaiting_quiet_mode),
+                reply_markup=build_mode_schedule_submenu(cfg, awaiting_quiet_mode),
+            )
+            return
+        if text.lower() == "clear":
+            start_key, end_key = _quiet_hours_keys(awaiting_quiet_mode)
+            cfg[start_key] = ""
+            cfg[end_key] = ""
+            save_client(user_id, cfg)
+            context.user_data.pop("awaiting_quiet_mode", None)
+            await update.message.reply_text(
+                ui_text(cfg, "quiet_hours_cleared") + "\n\n" + schedule_mode_menu_text(cfg, awaiting_quiet_mode),
+                reply_markup=build_mode_schedule_submenu(cfg, awaiting_quiet_mode),
+            )
+            return
+        quiet_match = re.fullmatch(r"\s*(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})\s*", text)
+        if not quiet_match or not _parse_hhmm(quiet_match.group(1)) or not _parse_hhmm(quiet_match.group(2)):
+            await update.message.reply_text(ui_text(cfg, "quiet_hours_invalid"))
+            return
+        start_key, end_key = _quiet_hours_keys(awaiting_quiet_mode)
+        cfg[start_key] = quiet_match.group(1)
+        cfg[end_key] = quiet_match.group(2)
+        save_client(user_id, cfg)
+        context.user_data.pop("awaiting_quiet_mode", None)
+        await update.message.reply_text(
+            ui_text(cfg, "quiet_hours_saved").format(start=cfg[start_key], end=cfg[end_key]) + "\n\n" + schedule_mode_menu_text(cfg, awaiting_quiet_mode),
+            reply_markup=build_mode_schedule_submenu(cfg, awaiting_quiet_mode),
         )
         return
 
@@ -4728,6 +4887,9 @@ async def interval_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     cfg["interval_minutes"] = minutes
+    for _m in ("rss", "creative"):
+        if mode_uses_interval(cfg, _m):
+            _schedule_next_interval_run(cfg, _m, datetime.now())
     save_client(user_id, cfg)
     await update.message.reply_text(f"⏱ Interval saved: {minutes} min.")
 
@@ -4996,6 +5158,9 @@ async def setinterval_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TY
 
     cfg = load_client(uid)
     cfg["interval_minutes"] = minutes
+    for _m in ("rss", "creative"):
+        if mode_uses_interval(cfg, _m):
+            _schedule_next_interval_run(cfg, _m, datetime.now())
     save_client(uid, cfg)
     await update.message.reply_text(f"✅ User {uid} interval set to {minutes} minutes")
 
@@ -5170,7 +5335,7 @@ async def on_startup(app: Application) -> None:
                     continue
                 next_key = _interval_next_run_key(mode)
                 next_run = _parse_local_iso_datetime(cfg.get(next_key) or "")
-                if next_run and next_run > startup_now:
+                if next_run:
                     continue
                 _schedule_next_interval_run(cfg, mode, startup_now)
                 changed = True
