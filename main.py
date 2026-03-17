@@ -421,6 +421,7 @@ DEFAULT_CLIENT = {
     "creative_schedule_times": [],
     "creative_last_schedule_date": None,
     "creative_last_schedule_time": None,
+    "timezone_offset_hours": 0,
 
     "daily_limit": 10,
     "daily_count": 0,
@@ -2108,6 +2109,45 @@ def _quiet_hours_keys(mode: str) -> tuple[str, str]:
     return "rss_quiet_hours_start", "rss_quiet_hours_end"
 
 
+def user_timezone_offset_hours(cfg: dict) -> int:
+    raw = cfg.get("timezone_offset_hours", 0)
+    try:
+        offset = int(raw)
+    except (TypeError, ValueError):
+        offset = 0
+    return max(-12, min(14, offset))
+
+
+def user_now(cfg: dict) -> datetime:
+    return (datetime.now(timezone.utc) + timedelta(hours=user_timezone_offset_hours(cfg))).replace(tzinfo=None)
+
+
+def user_timezone_label(cfg: dict) -> str:
+    offset = user_timezone_offset_hours(cfg)
+    sign = "+" if offset >= 0 else ""
+    return f"UTC{sign}{offset}"
+
+
+def parse_timezone_offset_hours(value: str) -> int | None:
+    raw = (value or "").strip().upper().replace(" ", "")
+    if raw.startswith("UTC"):
+        raw = raw[3:]
+    if raw in {"", "+", "-"}:
+        return None
+    if raw == "0":
+        return 0
+    match = re.fullmatch(r"([+-]?)(\d{1,2})", raw)
+    if not match:
+        return None
+    sign, hh = match.groups()
+    offset = int(hh)
+    if sign == "-":
+        offset = -offset
+    if offset < -12 or offset > 14:
+        return None
+    return offset
+
+
 def _parse_hhmm(value: str) -> tuple[int, int] | None:
     raw = (value or "").strip()
     if not re.fullmatch(r"\d{2}:\d{2}", raw):
@@ -2196,7 +2236,7 @@ def should_run_mode_now(
                     due_slot = quiet_slots[-1]
         if not due_slot:
             return False
-        today = str(date.today())
+        today = str(now.date())
         if last_date == today and last_time == due_slot:
             return False
         cfg[f"{mode}_scheduled_due_slot"] = due_slot
@@ -2252,10 +2292,10 @@ def mark_mode_scheduled(cfg: dict, mode: str, now: datetime) -> None:
     if not due_slot:
         due_slot = now.strftime("%H:%M")
     if mode == "creative":
-        cfg["creative_last_schedule_date"] = str(date.today())
+        cfg["creative_last_schedule_date"] = str(now.date())
         cfg["creative_last_schedule_time"] = due_slot
     else:
-        cfg["rss_last_schedule_date"] = str(date.today())
+        cfg["rss_last_schedule_date"] = str(now.date())
         cfg["rss_last_schedule_time"] = due_slot
 
 def build_mode_schedule_submenu(cfg: dict, mode: str) -> InlineKeyboardMarkup:
@@ -2277,7 +2317,7 @@ def schedule_mode_menu_text(cfg: dict, mode: str) -> str:
         + "\n"
         + ui_text(cfg, "schedule_interval_current").format(interval=interval_min)
         + "\n"
-        + ui_text(cfg, "schedule_timezone")
+        + ui_text(cfg, "schedule_timezone").format(timezone=user_timezone_label(cfg))
         + "\n\n"
         + ui_text(cfg, "schedule_current").format(schedule=schedule_summary_for_mode(cfg, mode))
     )
@@ -3140,7 +3180,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if cfg[key]:
             next_key = _interval_next_run_key(mode)
             if not _parse_local_iso_datetime(cfg.get(next_key) or ""):
-                _schedule_next_interval_run(cfg, mode, datetime.now())
+                _schedule_next_interval_run(cfg, mode, user_now(cfg))
         save_client(user_id, cfg)
         notice = ui_text(cfg, "posting_mode_interval_set") if cfg[key] else ui_text(cfg, "posting_mode_scheduled_set")
         await q.answer()
@@ -3198,6 +3238,14 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             + "\n\n"
             + ui_text(cfg, "quiet_hours_input_instructions"),
             reply_markup=build_mode_schedule_submenu(cfg, mode),
+        )
+        return
+
+    if data == "ui:schedule:timezone":
+        context.user_data["awaiting_timezone"] = True
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "timezone_input_instructions") + "\n\n" + ui_text(cfg, "schedule_timezone").format(timezone=user_timezone_label(cfg))
         )
         return
 
@@ -4479,7 +4527,7 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         cfg["interval_minutes"] = minutes
         cfg[f"{awaiting_interval_mode}_use_interval"] = True
-        _schedule_next_interval_run(cfg, awaiting_interval_mode, datetime.now())
+        _schedule_next_interval_run(cfg, awaiting_interval_mode, user_now(cfg))
         save_client(user_id, cfg)
         context.user_data.pop("awaiting_interval_mode", None)
         await update.message.reply_text(
@@ -4521,6 +4569,21 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             ui_text(cfg, "quiet_hours_saved").format(start=cfg[start_key], end=cfg[end_key]) + "\n\n" + schedule_mode_menu_text(cfg, awaiting_quiet_mode),
             reply_markup=build_mode_schedule_submenu(cfg, awaiting_quiet_mode),
         )
+        return
+
+    if context.user_data.get("awaiting_timezone"):
+        if text.lower() == "cancel":
+            context.user_data.pop("awaiting_timezone", None)
+            await update.message.reply_text(ui_text(cfg, "schedule_timezone").format(timezone=user_timezone_label(cfg)))
+            return
+        offset = parse_timezone_offset_hours(text)
+        if offset is None:
+            await update.message.reply_text(ui_text(cfg, "timezone_invalid"))
+            return
+        cfg["timezone_offset_hours"] = offset
+        save_client(user_id, cfg)
+        context.user_data.pop("awaiting_timezone", None)
+        await update.message.reply_text(ui_text(cfg, "timezone_saved").format(timezone=user_timezone_label(cfg)))
         return
 
     if context.user_data.get("awaiting_feed_add"):
@@ -4889,7 +4952,7 @@ async def interval_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     cfg["interval_minutes"] = minutes
     for _m in ("rss", "creative"):
         if mode_uses_interval(cfg, _m):
-            _schedule_next_interval_run(cfg, _m, datetime.now())
+            _schedule_next_interval_run(cfg, _m, user_now(cfg))
     save_client(user_id, cfg)
     await update.message.reply_text(f"⏱ Interval saved: {minutes} min.")
 
@@ -5160,7 +5223,7 @@ async def setinterval_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TY
     cfg["interval_minutes"] = minutes
     for _m in ("rss", "creative"):
         if mode_uses_interval(cfg, _m):
-            _schedule_next_interval_run(cfg, _m, datetime.now())
+            _schedule_next_interval_run(cfg, _m, user_now(cfg))
     save_client(uid, cfg)
     await update.message.reply_text(f"✅ User {uid} interval set to {minutes} minutes")
 
@@ -5180,7 +5243,6 @@ async def autopost_loop(app: Application) -> None:
     while True:
         try:
             ensure_dirs()
-            now = datetime.now()
 
             for p in CLIENTS_DIR.glob("*.json"):
                 try:
@@ -5189,6 +5251,7 @@ async def autopost_loop(app: Application) -> None:
                     continue
 
                 cfg = load_client(user_id)
+                now = user_now(cfg)
 
                 mode = cfg.get("mode")
                 required_mode = "creator" if mode == "creator" else "rss"
@@ -5315,7 +5378,6 @@ async def on_startup(app: Application) -> None:
             encoding="utf-8",
         )
 
-    startup_now = datetime.now()
     for p in CLIENTS_DIR.glob("*.json"):
         try:
             user_id = int(p.stem)
@@ -5337,7 +5399,7 @@ async def on_startup(app: Application) -> None:
                 next_run = _parse_local_iso_datetime(cfg.get(next_key) or "")
                 if next_run:
                     continue
-                _schedule_next_interval_run(cfg, mode, startup_now)
+                _schedule_next_interval_run(cfg, mode, user_now(cfg))
                 changed = True
 
         if changed:
