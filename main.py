@@ -2210,7 +2210,16 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:creative:preview":
         if not await enforce_mode_paywall(update, cfg, "creator"):
             return
-        selected, state = require_channel_context(cfg, context, "creative_preview")
+        try:
+            selected, state = require_channel_context(cfg, context, "creative_preview")
+        except Exception:
+            logger.exception("preview config stage failed for user %s", user_id)
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "preview_stage_config_failed"),
+                reply_markup=build_creative_submenu(cfg),
+            )
+            return
         if state == "empty":
             await q.answer()
             await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
@@ -2224,12 +2233,37 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
         await q.answer()
         try:
-            msg = creator_make_post(user_id, cfg)
-            save_client(user_id, cfg)
-            await q.message.reply_text(
-                ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + "🧪 Preview:\n\n" + msg,
-                reply_markup=build_creative_submenu(cfg),
-            )
+            if not selected:
+                logger.warning("preview config stage failed for user %s: no selected channel", user_id)
+                await q.message.reply_text(
+                    ui_text(cfg, "preview_stage_config_failed"),
+                    reply_markup=build_creative_submenu(cfg),
+                )
+                return
+
+            try:
+                msg = creator_make_post(user_id, cfg)
+                save_client(user_id, cfg)
+            except Exception:
+                logger.exception("preview ai stage failed for user %s", user_id)
+                await q.message.reply_text(
+                    ui_text(cfg, "preview_stage_ai_failed"),
+                    reply_markup=build_creative_submenu(cfg),
+                )
+                return
+
+            try:
+                await q.message.reply_text(
+                    ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + "🧪 Preview:\n\n" + msg,
+                    reply_markup=build_creative_submenu(cfg),
+                )
+            except Exception:
+                logger.exception("preview send stage failed for user %s", user_id)
+                await q.message.reply_text(
+                    ui_text(cfg, "preview_stage_send_failed"),
+                    reply_markup=build_creative_submenu(cfg),
+                )
+                return
         except Exception:
             logger.exception("Creative preview failed for user %s", user_id)
             await q.message.reply_text(
@@ -2264,7 +2298,16 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:rss:preview":
         if not await enforce_mode_paywall(update, cfg, "rss"):
             return
-        selected, state = require_channel_context(cfg, context, "rss_preview")
+        try:
+            selected, state = require_channel_context(cfg, context, "rss_preview")
+        except Exception:
+            logger.exception("preview config stage failed for user %s", user_id)
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "preview_stage_config_failed"),
+                reply_markup=build_rss_submenu(cfg),
+            )
+            return
         if state == "empty":
             await q.answer()
             await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
@@ -2279,8 +2322,63 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await q.answer()
         temp_file = None
         try:
-            preview, image_url, preview_entities, _ = await rss_preview_text(context.bot, user_id, cfg)
-            send_image_url, temp_file, preview_notice_key = await prepare_rss_preview_image_for_sending(context.bot, cfg, user_id, image_url)
+            if not selected:
+                logger.warning("preview config stage failed for user %s: no selected channel", user_id)
+                await q.message.reply_text(
+                    ui_text(cfg, "preview_stage_config_failed"),
+                    reply_markup=build_rss_submenu(cfg),
+                )
+                return
+
+            try:
+                feeds = cfg.get("feeds", [])
+                if not feeds:
+                    await q.message.reply_text(ui_text(cfg, "preview_no_feeds"), reply_markup=build_rss_submenu(cfg))
+                    return
+                best = pick_newest_unseen(cfg)
+                if not best:
+                    await q.message.reply_text("No new items found (or everything already posted).", reply_markup=build_rss_submenu(cfg))
+                    return
+                _, title, link, src = best
+                summary = extract_summary_for_link(src, link)
+                image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
+            except Exception:
+                logger.exception("preview rss stage failed for user %s", user_id)
+                await q.message.reply_text(
+                    ui_text(cfg, "preview_stage_rss_failed"),
+                    reply_markup=build_rss_submenu(cfg),
+                )
+                return
+
+            try:
+                msg = llm_generate_post(user_id, cfg, title, summary, link)
+            except Exception:
+                logger.exception("preview ai stage failed for user %s", user_id)
+                await q.message.reply_text(
+                    ui_text(cfg, "preview_stage_ai_failed"),
+                    reply_markup=build_rss_submenu(cfg),
+                )
+                return
+
+            text, entities = build_rss_message_payload(cfg, msg, link)
+            preview_prefix = "🧪 Preview:\n\n"
+            preview = preview_prefix + text
+            preview_entities = _load_message_entities(
+                [_message_entity_to_dict(e) for e in entities], offset_shift=len(preview_prefix)
+            )
+
+            try:
+                send_image_url, temp_file, preview_notice_key = await prepare_rss_preview_image_for_sending(
+                    context.bot, cfg, user_id, image_url
+                )
+            except Exception:
+                logger.exception("preview image stage failed for user %s", user_id)
+                await q.message.reply_text(
+                    ui_text(cfg, "preview_stage_image_failed"),
+                    reply_markup=build_rss_submenu(cfg),
+                )
+                return
+
             await q.message.reply_text(ui_text(cfg, "channel_selected_now").format(channel=selected))
             if preview_notice_key:
                 await q.message.reply_text(ui_text(cfg, preview_notice_key))
@@ -2291,10 +2389,21 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     await q.message.reply_photo(photo=photo_input, caption=preview[:1024], caption_entities=caption_entities or None, reply_markup=build_rss_submenu(cfg))
                     return
                 except Exception:
-                    logger.exception("RSS preview media send failed for user %s", user_id)
-                    await q.message.reply_text(ui_text(cfg, "preview_fallback_text_only"))
+                    logger.exception("preview send stage failed for user %s", user_id)
+                    await q.message.reply_text(
+                        ui_text(cfg, "preview_stage_send_failed"),
+                        reply_markup=build_rss_submenu(cfg),
+                    )
+                    return
 
-            await q.message.reply_text(preview, entities=preview_entities or None, reply_markup=build_rss_submenu(cfg))
+            try:
+                await q.message.reply_text(preview, entities=preview_entities or None, reply_markup=build_rss_submenu(cfg))
+            except Exception:
+                logger.exception("preview send stage failed for user %s", user_id)
+                await q.message.reply_text(
+                    ui_text(cfg, "preview_stage_send_failed"),
+                    reply_markup=build_rss_submenu(cfg),
+                )
         except Exception:
             logger.exception("RSS preview failed for user %s", user_id)
             await q.message.reply_text(
