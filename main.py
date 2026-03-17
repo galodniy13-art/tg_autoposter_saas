@@ -1021,12 +1021,24 @@ async def _ensure_asset_path(bot, cfg: dict, user_id: int, mode: str, asset_type
         return ""
 
 
-def _compose_rss_image(template_path: Path, rss_image_url: str, watermark_path: Path | None = None) -> Path | None:
+def _compose_rss_image_with_status(template_path: Path, rss_image_url: str, watermark_path: Path | None = None) -> tuple[Path | None, str | None]:
+    base = None
+    rss_img = None
     try:
         base = Image.open(template_path).convert("RGBA")
+    except Exception:
+        logger.warning("RSS preview template load failed: %s", template_path)
+        return None, "template_load_failed"
+
+    try:
         rss_resp = requests.get(rss_image_url, timeout=20)
         rss_resp.raise_for_status()
         rss_img = Image.open(io.BytesIO(rss_resp.content)).convert("RGBA")
+    except Exception:
+        logger.warning("RSS preview source image download/open failed: %s", rss_image_url)
+        return None, "rss_image_unusable"
+
+    try:
 
         canvas_w, canvas_h = base.size
         margin_x = max(8, int(canvas_w * 0.08))
@@ -1042,22 +1054,31 @@ def _compose_rss_image(template_path: Path, rss_image_url: str, watermark_path: 
         base.paste(fitted, (margin_x, margin_y), fitted)
 
         if watermark_path and watermark_path.exists() and watermark_path.is_file():
-            wm = Image.open(watermark_path).convert("RGBA")
-            max_w = max(24, int(canvas_w * 0.22))
-            max_h = max(24, int(canvas_h * 0.12))
-            wm.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
-            pad = max(8, int(min(canvas_w, canvas_h) * 0.03))
-            pos = (canvas_w - wm.width - pad, canvas_h - wm.height - pad)
-            base.paste(wm, pos, wm)
+            try:
+                wm = Image.open(watermark_path).convert("RGBA")
+                max_w = max(24, int(canvas_w * 0.22))
+                max_h = max(24, int(canvas_h * 0.12))
+                wm.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+                pad = max(8, int(min(canvas_w, canvas_h) * 0.03))
+                pos = (canvas_w - wm.width - pad, canvas_h - wm.height - pad)
+                base.paste(wm, pos, wm)
+            except Exception:
+                logger.warning("RSS preview watermark load failed: %s", watermark_path)
+                return None, "watermark_load_failed"
 
         composed = base.convert("RGB")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             temp_path = Path(tmp.name)
         composed.save(temp_path, format="JPEG", quality=92, optimize=True)
-        return temp_path
+        return temp_path, None
     except Exception:
-        logger.exception("RSS image composition failed")
-        return None
+        logger.warning("RSS image composition failed")
+        return None, "compose_failed"
+
+
+def _compose_rss_image(template_path: Path, rss_image_url: str, watermark_path: Path | None = None) -> Path | None:
+    composed_path, _ = _compose_rss_image_with_status(template_path, rss_image_url, watermark_path)
+    return composed_path
 
 
 async def prepare_rss_image_for_sending(bot, cfg: dict, user_id: int, image_url: str | None) -> tuple[str | None, Path | None]:
@@ -1081,6 +1102,44 @@ async def prepare_rss_image_for_sending(bot, cfg: dict, user_id: int, image_url:
     if not composed_path:
         return image_url, None
     return str(composed_path), composed_path
+
+
+async def prepare_rss_preview_image_for_sending(bot, cfg: dict, user_id: int, image_url: str | None) -> tuple[str | None, Path | None, str | None]:
+    if not image_url:
+        logger.info("RSS preview image missing for user %s", user_id)
+        return None, None, "preview_status_no_rss_image_text_only"
+    if not bool(cfg.get("use_rss_feed_image", True)):
+        return image_url, None, None
+    if str(cfg.get("mode") or "").strip().lower() not in ("rss", "both"):
+        return image_url, None, None
+
+    template_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "template")
+    if not template_rel:
+        if cfg.get("rss_template_file_id"):
+            logger.info("RSS preview template download failed for user %s", user_id)
+            return image_url, None, "preview_status_asset_load_failed_normal"
+        return image_url, None, None
+
+    template_path = BASE_DIR / template_rel
+    if not template_path.exists() or not template_path.is_file():
+        logger.info("RSS preview template file missing for user %s: %s", user_id, template_path)
+        return image_url, None, "preview_status_asset_load_failed_normal"
+
+    watermark_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "watermark")
+    watermark_path = (BASE_DIR / watermark_rel) if watermark_rel else None
+    if cfg.get("rss_watermark_file_id") and not watermark_rel:
+        logger.info("RSS preview watermark download failed for user %s", user_id)
+        return image_url, None, "preview_status_asset_load_failed_normal"
+
+    composed_path, compose_error = _compose_rss_image_with_status(template_path, image_url, watermark_path)
+    if not composed_path:
+        if compose_error == "rss_image_unusable":
+            return None, None, "preview_status_no_rss_image_text_only"
+        if compose_error in {"template_load_failed", "watermark_load_failed"}:
+            return image_url, None, "preview_status_asset_load_failed_normal"
+        return image_url, None, "preview_status_template_build_failed_normal"
+
+    return str(composed_path), composed_path, None
 
 # ===================== LLM providers =====================
 def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str) -> str:
@@ -2220,12 +2279,15 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await q.answer()
         temp_file = None
         try:
-            preview, image_url, preview_entities, temp_file = await rss_preview_text(context.bot, user_id, cfg)
+            preview, image_url, preview_entities, _ = await rss_preview_text(context.bot, user_id, cfg)
+            send_image_url, temp_file, preview_notice_key = await prepare_rss_preview_image_for_sending(context.bot, cfg, user_id, image_url)
             await q.message.reply_text(ui_text(cfg, "channel_selected_now").format(channel=selected))
-            if image_url:
+            if preview_notice_key:
+                await q.message.reply_text(ui_text(cfg, preview_notice_key))
+            if send_image_url:
                 try:
                     caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in preview_entities], max_offset=1024)
-                    photo_input = temp_file if temp_file else image_url
+                    photo_input = temp_file if temp_file else send_image_url
                     await q.message.reply_photo(photo=photo_input, caption=preview[:1024], caption_entities=caption_entities or None, reply_markup=build_rss_submenu(cfg))
                     return
                 except Exception:
@@ -3718,11 +3780,14 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await reply_ui(update, "No new items found (or everything already posted).", cfg, show_menu=True)
         return
 
-    preview, image_url, preview_entities, temp_file = await rss_preview_text(context.bot, user_id, cfg)
+    preview, image_url, preview_entities, _ = await rss_preview_text(context.bot, user_id, cfg)
+    send_image_url, temp_file, preview_notice_key = await prepare_rss_preview_image_for_sending(context.bot, cfg, user_id, image_url)
     try:
-        if image_url and update.message:
+        if preview_notice_key and update.message:
+            await update.message.reply_text(ui_text(cfg, preview_notice_key))
+        if send_image_url and update.message:
             caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in preview_entities], max_offset=1024)
-            photo_input = temp_file if temp_file else image_url
+            photo_input = temp_file if temp_file else send_image_url
             await update.message.reply_photo(photo=photo_input, caption=preview[:1024], caption_entities=caption_entities or None, reply_markup=build_main_menu_clean(cfg))
             return
         if update.message:
