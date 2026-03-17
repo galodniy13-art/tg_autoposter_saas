@@ -185,8 +185,7 @@ def build_rss_output_menu(labels: dict, include_source_link: bool, use_feed_imag
                 InlineKeyboardButton(labels["btn_edit_watermark"], callback_data="ui:rss:asset:watermark"),
             ],
             [
-                InlineKeyboardButton(labels["btn_add_emoji"], callback_data="ui:rss:emoji:add"),
-                InlineKeyboardButton(labels["btn_delete_emoji"], callback_data="ui:rss:emoji:delete"),
+                InlineKeyboardButton(labels["btn_emoji_management"], callback_data="ui:rss:emoji:menu"),
             ],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:rss:menu")],
         ]
@@ -199,14 +198,24 @@ def build_creative_output_menu(labels: dict, bold_title_enabled: bool) -> Inline
         [
             [
                 InlineKeyboardButton(bold_label, callback_data="ui:creative:toggle_bold_title"),
-                InlineKeyboardButton(labels["btn_add_emoji"], callback_data="ui:creative:emoji:add"),
+                InlineKeyboardButton(labels["btn_emoji_management"], callback_data="ui:creative:emoji:menu"),
             ],
             [
-                InlineKeyboardButton(labels["btn_delete_emoji"], callback_data="ui:creative:emoji:delete"),
                 InlineKeyboardButton(labels["btn_edit_template_image"], callback_data="ui:creative:asset:template"),
             ],
             [InlineKeyboardButton(labels["btn_edit_watermark"], callback_data="ui:creative:asset:watermark")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
+        ]
+    )
+
+
+def build_emoji_management_menu(labels: dict, mode: str) -> InlineKeyboardMarkup:
+    base = f"ui:{mode}:emoji"
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(labels["btn_add_update_emoji"], callback_data=f"{base}:add")],
+            [InlineKeyboardButton(labels["btn_delete_emoji"], callback_data=f"{base}:delete")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data=f"ui:{mode}:output")],
         ]
     )
 
