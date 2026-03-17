@@ -156,6 +156,15 @@ def build_prompt_builder_review_menu(labels: dict, mode: str) -> InlineKeyboardM
     )
 
 
+def build_copy_style_review_menu(labels: dict, mode: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(labels["btn_save"], callback_data=f"ui:copystyle:{mode}:save")],
+            [InlineKeyboardButton(labels["btn_edit"], callback_data=f"ui:copystyle:{mode}:edit")],
+        ]
+    )
+
+
 def build_rss_output_menu(labels: dict, include_source_link: bool, use_feed_image: bool, cta_enabled: bool) -> InlineKeyboardMarkup:
     source_label = labels["btn_source_link_on"] if include_source_link else labels["btn_source_link_off"]
     image_label = labels["btn_feed_image_on"] if use_feed_image else labels["btn_feed_image_off"]

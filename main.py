@@ -41,10 +41,11 @@ from keyboards import (
     build_scheduling_menu,
     build_mode_schedule_menu,
     build_prompt_builder_review_menu,
+    build_copy_style_review_menu,
 )
 
 from texts import TEXTS as UI_TEXTS
-from telegram.constants import ChatMemberStatus
+from telegram.constants import ChatMemberStatus, ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (
     Application,
@@ -1409,6 +1410,10 @@ def build_prompt_builder_review(cfg: dict, mode: str) -> InlineKeyboardMarkup:
     return build_prompt_builder_review_menu(ui_pack(cfg), mode)
 
 
+def build_copy_style_review(cfg: dict, mode: str) -> InlineKeyboardMarkup:
+    return build_copy_style_review_menu(ui_pack(cfg), mode)
+
+
 def clear_prompt_interaction_state(
     context: ContextTypes.DEFAULT_TYPE,
     *,
@@ -1421,6 +1426,7 @@ def clear_prompt_interaction_state(
     if clear_builder:
         context.user_data.pop("prompt_builder", None)
     context.user_data.pop("copy_style", None)
+    context.user_data.pop("copy_style_review", None)
 
 
 # ===================== Creator mode (text-only) =====================
@@ -1963,27 +1969,25 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     id_value = str(user_id)
     text = (
         f"{ui_text(cfg, 'status_title')}\n\n"
-        f"{id_label}\n{id_value}\n\n"
+        f"{id_label}\n<code>{id_value}</code>\n\n"
         f"📺 {ui_text(cfg, 'status_channels')}:\n{channels_text}\n\n"
         f"📰 {ui_text(cfg, 'status_rss_daily')}: {rss_daily}\n"
         f"✨ {ui_text(cfg, 'status_creative_daily')}: {creative_daily}\n"
         f"📅 {ui_text(cfg, 'status_valid_until')}: {sub}"
     )
-    id_offset = len(ui_text(cfg, 'status_title')) + 2 + len(id_label) + 1
-    entities = [MessageEntity(type="code", offset=id_offset, length=len(id_value))]
     markup = build_main_menu_clean(cfg)
 
     if update.callback_query:
         q = update.callback_query
         await q.answer()
         try:
-            await q.edit_message_text(text=text, entities=entities, reply_markup=markup)
+            await q.edit_message_text(text=text, parse_mode=ParseMode.HTML, reply_markup=markup)
         except BadRequest:
-            await q.message.reply_text(text=text, entities=entities, reply_markup=markup)
+            await q.message.reply_text(text=text, parse_mode=ParseMode.HTML, reply_markup=markup)
         return
 
     if update.message:
-        await update.message.reply_text(text=text, entities=entities, reply_markup=markup)
+        await update.message.reply_text(text=text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 async def materials_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -2274,6 +2278,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
         await q.answer()
         try:
+            await q.message.reply_text(ui_text(cfg, "preview_loading"))
             if not selected:
                 logger.warning("preview config stage failed for user %s: no selected channel", user_id)
                 await q.message.reply_text(
@@ -2361,6 +2366,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
         await q.answer()
+        await q.message.reply_text(ui_text(cfg, "preview_loading"))
         temp_file = None
         try:
             if not selected:
@@ -3022,6 +3028,56 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
 
+    if data.startswith("ui:copystyle:"):
+        parts = data.split(":")
+        if len(parts) != 4:
+            await q.answer()
+            return
+        mode = parts[2]
+        action = parts[3]
+        copy_style_review = context.user_data.get("copy_style_review") or {}
+        if copy_style_review.get("mode") != mode:
+            await q.answer()
+            return
+        generated = (copy_style_review.get("generated_prompt") or "").strip()
+        if not generated:
+            await q.answer()
+            return
+        selected_channel = (copy_style_review.get("selected_channel") or "").strip()
+        if selected_channel:
+            switch_active_channel(cfg, selected_channel)
+
+        if action == "save":
+            prompt_key = "creative_prompt" if mode == "creative" else "rss_prompt"
+            cfg[prompt_key] = generated
+            save_client(user_id, cfg)
+            context.user_data.pop("copy_style_review", None)
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "copy_style_success")
+                + "\n\n"
+                + (ui_text(cfg, "creative_menu_title") if mode == "creative" else ui_text(cfg, "rss_menu_title")),
+                reply_markup=build_creative_submenu(cfg) if mode == "creative" else build_rss_submenu(cfg),
+            )
+            return
+
+        if action == "edit":
+            context.user_data.pop("copy_style_review", None)
+            clear_prompt_interaction_state(context, clear_manual=False, clear_builder=True)
+            context.user_data["awaiting_prompt_mode"] = mode
+            context.user_data["awaiting_prompt_channel"] = selected_channel
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_selected_now").format(channel=selected_channel)
+                + "\n\n"
+                + ui_text(cfg, "copy_style_edit_ready").format(prompt=generated[:1500])
+                + "\n\n"
+                + ui_text(cfg, "prompt_edit_instructions")
+                + "\n"
+                + ui_text(cfg, "prompt_edit_cancel_hint")
+            )
+            return
+
     if data == "ui:creative:copystyle":
         if not await enforce_mode_paywall(update, cfg, "creator"):
             return
@@ -3631,6 +3687,7 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         if selected_channel:
             switch_active_channel(cfg, selected_channel)
 
+        await update.message.reply_text(ui_text(cfg, "copy_style_loading"))
         try:
             requested_language = "Russian" if (cfg.get("language") or "en") == "ru" else "English"
             generated = llm_generate_style_prompt_from_examples(mode, examples[:3], requested_language)
@@ -3638,17 +3695,17 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(ui_text(cfg, "prompt_builder_error"))
             return
 
-        prompt_key = "creative_prompt" if mode == "creative" else "rss_prompt"
-        cfg[prompt_key] = generated
-        save_client(user_id, cfg)
-
+        context.user_data["copy_style_review"] = {
+            "mode": mode,
+            "selected_channel": selected_channel,
+            "generated_prompt": generated,
+        }
         await update.message.reply_text(
-            ui_text(cfg, "copy_style_success")
-            + "\n\n"
-            + (ui_text(cfg, "creative_menu_title") if mode == "creative" else ui_text(cfg, "rss_menu_title")),
-            reply_markup=build_creative_submenu(cfg) if mode == "creative" else build_rss_submenu(cfg),
+            ui_text(cfg, "copy_style_review").format(prompt=generated),
+            reply_markup=build_copy_style_review(cfg, mode),
         )
         return
+
 
     awaiting_schedule_mode = context.user_data.get("awaiting_schedule_mode")
     if awaiting_schedule_mode:
