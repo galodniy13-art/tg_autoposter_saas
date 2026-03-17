@@ -996,18 +996,24 @@ def _first_nonempty_line_bounds(text: str) -> tuple[int, int] | None:
     return None
 
 
+def _utf16_len(value: str) -> int:
+    return len(value.encode("utf-16-le")) // 2
+
+
 def apply_bold_title(text: str, entities: list[MessageEntity]) -> list[MessageEntity]:
     bounds = _first_nonempty_line_bounds(text)
     if not bounds:
         return entities
     start, end = bounds
+    utf16_start = _utf16_len(text[:start])
+    utf16_end = _utf16_len(text[:end])
     title_has_bold = any(
-        e.type == MessageEntity.BOLD and e.offset <= start and (e.offset + e.length) >= end
+        e.type == MessageEntity.BOLD and e.offset <= utf16_start and (e.offset + e.length) >= utf16_end
         for e in entities
     )
     if title_has_bold:
         return entities
-    return entities + [MessageEntity(type=MessageEntity.BOLD, offset=start, length=end - start)]
+    return entities + [MessageEntity(type=MessageEntity.BOLD, offset=utf16_start, length=utf16_end - utf16_start)]
 
 
 def emoji_style_note(cfg: dict, mode: str) -> str:
