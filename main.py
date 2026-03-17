@@ -34,6 +34,7 @@ from keyboards import (
     build_rss_output_menu,
     build_creative_output_menu,
     build_asset_management_menu,
+    build_emoji_management_menu,
     build_feed_management_menu,
     build_feed_delete_menu,
     build_channel_delete_menu,
@@ -164,7 +165,7 @@ TEXTS = {
     "   Ask admin to activate, then /fetchonce or /autoposton"
 ),
 "ui_addfeed": "Paste your RSS link like:\n/addfeed [your link]",
-"ui_setchannel": "Type your channel username like:\n/setchannel @yourchannel\n\nBot must be admin in the channel.",
+"ui_setchannel": "Add the bot to your channel as an admin, then forward one message from that channel here.\nI will use that forwarded message to connect the channel.",
 "ui_setstyle": "Paste your style prompt like:\n/setstyle <your text>\n\nExample: language, tone, length, emojis, forbidden topics.",
 "ui_pay": "Payment / activation:\n{pay}",
 "ui_schedule": "Schedule:\n{schedule}\n\nCommands:\n/schedule\n/schedule add 09:00\n/schedule remove 09:00\n/schedule clear\n/schedule on\n/schedule off",
@@ -240,7 +241,7 @@ TEXTS = {
     "   Активация админом, потом /fetchonce или /autoposton"
 ),
 "ui_addfeed": "Вставьте RSS ссылку так:\n/addfeed [ваша ссылка]",
-"ui_setchannel": "Напишите юзернейм канала так:\n/setchannel @вашканал\n\nБот должен быть админом канала.",
+"ui_setchannel": "Добавьте бота в канал как администратора, а затем перешлите сюда одно сообщение из этого канала.\nЯ использую это пересланное сообщение, чтобы подключить канал.",
 "ui_setstyle": "Вставьте prompt стиля так:\n/setstyle <ваш текст>\n\nПример: язык, тон, длина, эмодзи, запреты.",
 "ui_pay": "Оплата / активация:\n{pay}",
 "ui_schedule": "Расписание:\n{schedule}\n\nКоманды:\n/schedule\n/schedule add 09:00\n/schedule remove 09:00\n/schedule clear\n/schedule on\n/schedule off",
@@ -366,6 +367,7 @@ DEFAULT_CLIENT = {
 
     "channel": None,
     "channels": [],
+    "channel_labels": {},
     "channel_slots": 0,
     "feeds": [],
     "posted_urls": [],
@@ -377,6 +379,7 @@ DEFAULT_CLIENT = {
     "rss_bold_title": False,
     "rss_custom_emojis_text": "",
     "rss_custom_emojis_entities": [],
+    "rss_custom_emojis_link": "",
     "rss_template_file_id": "",
     "rss_template_image_path": "",
     "rss_watermark_file_id": "",
@@ -388,6 +391,7 @@ DEFAULT_CLIENT = {
     "creative_bold_title": False,
     "creative_custom_emojis_text": "",
     "creative_custom_emojis_entities": [],
+    "creative_custom_emojis_link": "",
 
     "autopost_enabled": False,
     "interval_minutes": 30,
@@ -436,6 +440,7 @@ CHANNEL_SCOPED_KEYS = (
     "rss_bold_title",
     "rss_custom_emojis_text",
     "rss_custom_emojis_entities",
+    "rss_custom_emojis_link",
     "rss_template_file_id",
     "rss_template_image_path",
     "rss_watermark_file_id",
@@ -447,6 +452,7 @@ CHANNEL_SCOPED_KEYS = (
     "creative_bold_title",
     "creative_custom_emojis_text",
     "creative_custom_emojis_entities",
+    "creative_custom_emojis_link",
     "rss_schedule_enabled",
     "rss_schedule_times",
     "rss_last_schedule_date",
@@ -1656,6 +1662,10 @@ def build_creative_output_submenu(cfg: dict) -> InlineKeyboardMarkup:
     return build_creative_output_menu(ui_pack(cfg), bool(cfg.get("creative_bold_title", False)))
 
 
+def build_emoji_management_submenu(cfg: dict, mode: str) -> InlineKeyboardMarkup:
+    return build_emoji_management_menu(ui_pack(cfg), mode)
+
+
 def build_asset_management_submenu(cfg: dict, mode: str, asset_type: str) -> InlineKeyboardMarkup:
     has_asset = bool(cfg.get(f"{mode}_{asset_type}_file_id"))
     return build_asset_management_menu(ui_pack(cfg), mode, asset_type, has_asset)
@@ -1680,6 +1690,47 @@ def output_settings_text(cfg: dict, mode: str) -> str:
     if mode == "rss":
         return ui_text(cfg, "rss_output_settings_title") + "\n\n" + post_format_assets_text(cfg, mode)
     return ui_text(cfg, "creative_output_settings_title") + "\n\n" + post_format_assets_text(cfg, mode)
+
+
+def emoji_management_text(cfg: dict, mode: str) -> str:
+    has_emoji = bool((cfg.get(f"{mode}_custom_emojis_text") or "").strip())
+    has_link = bool((cfg.get(f"{mode}_custom_emojis_link") or "").strip())
+    return (
+        ui_text(cfg, "emoji_management_title")
+        + "\n\n"
+        + ui_text(cfg, "emoji_management_status").format(
+            emoji=ui_text(cfg, "status_yes") if has_emoji else ui_text(cfg, "status_no"),
+            link=ui_text(cfg, "status_yes") if has_link else ui_text(cfg, "status_no"),
+        )
+        + "\n\n"
+        + ui_text(cfg, "emoji_prompt_send")
+    )
+
+
+def _extract_channel_from_forward(msg) -> tuple[str | None, str | None]:
+    origin = getattr(msg, "forward_origin", None)
+    if origin and getattr(origin, "type", "") == "channel":
+        chat = getattr(origin, "chat", None)
+        if chat and getattr(chat, "id", None):
+            username = getattr(chat, "username", None)
+            channel_key = f"@{username}" if username else str(chat.id)
+            title = getattr(chat, "title", None)
+            label = f"{title} (@{username})" if title and username else (title or channel_key)
+            return channel_key, label
+
+    sender_chat = getattr(msg, "sender_chat", None)
+    if sender_chat and getattr(sender_chat, "id", None):
+        username = getattr(sender_chat, "username", None)
+        channel_key = f"@{username}" if username else str(sender_chat.id)
+        title = getattr(sender_chat, "title", None)
+        label = f"{title} (@{username})" if title and username else (title or channel_key)
+        return channel_key, label
+    return None, None
+
+
+def _looks_like_link(value: str) -> bool:
+    raw = value.strip().lower()
+    return raw.startswith("http://") or raw.startswith("https://") or raw.startswith("t.me/")
 
 
 def asset_management_text(cfg: dict, mode: str, asset_type: str) -> str:
@@ -1921,7 +1972,7 @@ def channels_overview(cfg: dict) -> str:
     if not channels:
         return ui_text(cfg, "channels_empty_state").format(slots=slots)
     return ui_text(cfg, "channels_list_title").format(count=len(channels), slots=slots) + "\n" + "\n".join(
-        [f"{i+1}) {ch}" for i, ch in enumerate(channels)]
+        [f"{i+1}) {channel_display_name(cfg, ch)}" for i, ch in enumerate(channels)]
     )
 
 
@@ -1931,6 +1982,15 @@ def build_channel_delete_selection_menu(cfg: dict) -> InlineKeyboardMarkup:
 
 def get_saved_channels(cfg: dict) -> list[str]:
     return normalize_channels(cfg)
+
+
+def channel_display_name(cfg: dict, channel: str) -> str:
+    labels = cfg.get("channel_labels")
+    if isinstance(labels, dict):
+        label = (labels.get(channel) or "").strip()
+        if label:
+            return label
+    return channel
 
 
 def clear_mode_channel_selection(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2766,6 +2826,26 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.message.reply_text(text=text, reply_markup=submenu)
         return
 
+    if data in ("ui:rss:emoji:menu", "ui:creative:emoji:menu"):
+        mode = "creative" if data.startswith("ui:creative") else "rss"
+        action = "creative_output" if mode == "creative" else "rss_output"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_title"), reply_markup=build_channel_picker(cfg, action, f"ui:mode:{mode}:menu"))
+            return
+        await q.answer()
+        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + emoji_management_text(cfg, mode)
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_emoji_management_submenu(cfg, mode))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_emoji_management_submenu(cfg, mode))
+        return
+
     if data in ("ui:rss:emoji:add", "ui:creative:emoji:add"):
         mode = "creative" if data.startswith("ui:creative") else "rss"
         action = "creative_output" if mode == "creative" else "rss_output"
@@ -2798,10 +2878,11 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
         cfg[f"{mode}_custom_emojis_text"] = ""
         cfg[f"{mode}_custom_emojis_entities"] = []
+        cfg[f"{mode}_custom_emojis_link"] = ""
         save_client(user_id, cfg)
         await q.answer()
-        text = ui_text(cfg, "emoji_deleted") + "\n\n" + output_settings_text(cfg, mode)
-        submenu = build_creative_output_submenu(cfg) if mode == "creative" else build_rss_output_submenu(cfg)
+        text = ui_text(cfg, "emoji_deleted") + "\n\n" + emoji_management_text(cfg, mode)
+        submenu = build_emoji_management_submenu(cfg, mode)
         try:
             await q.edit_message_text(text=text, reply_markup=submenu)
         except BadRequest:
@@ -3347,7 +3428,9 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.answer()
             await q.message.reply_text(text)
             return
-        await send_menu(update, cfg, tr(cfg, "ui_setchannel"))
+        context.user_data["awaiting_channel_forward"] = True
+        await q.answer()
+        await q.message.reply_text(tr(cfg, "ui_setchannel"))
         return
 
     if data == "ui:addfeed":
@@ -3392,6 +3475,10 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         removed = channels[idx]
         channels.pop(idx)
         cfg["channels"] = channels
+        labels = cfg.get("channel_labels")
+        if isinstance(labels, dict):
+            labels.pop(removed, None)
+            cfg["channel_labels"] = labels
         active_idx = context.user_data.get("active_channel_idx")
         if not channels:
             context.user_data.pop("active_channel_idx", None)
@@ -3530,51 +3617,13 @@ async def setchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     cfg = load_client(user_id)
 
     channels = get_saved_channels(cfg)
-
-    if not context.args:
-        await update.message.reply_text("Usage: /setchannel @channelusername")
-        return
-
-    channel = context.args[0].strip()
-    if not channel.startswith("@"):
-        await update.message.reply_text("Channel should look like @channelusername")
-        return
-
     slots = int(cfg.get("channel_slots", 0) or 0)
-    if channel not in channels and len(channels) >= slots:
+    if len(channels) >= slots:
         await send_menu(update, cfg, ui_text(cfg, "channel_slots_limit").format(count=len(channels), slots=slots))
         return
 
-    bot = context.bot
-    try:
-        member = await bot.get_chat_member(chat_id=channel, user_id=bot.id)
-        if member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER):
-            await update.message.reply_text(
-                "Bot sees the channel, admin rights are missing.\n"
-                "Add the bot as admin with permission to post messages, then retry."
-            )
-            return
-    except Exception as e:
-        await update.message.reply_text(
-            "Channel access failed.\n"
-            "Checklist:\n"
-            "1) Channel is public (has @username)\n"
-            "2) Bot is added as admin\n"
-            "3) Username typed correctly\n"
-            f"\nError: {type(e).__name__}"
-        )
-        return
-
-    existing_idx = channels.index(channel) if channel in channels else -1
-    if existing_idx == -1:
-        channels.append(channel)
-        existing_idx = len(channels) - 1
-
-    cfg["channels"] = channels
-    switch_active_channel(cfg, channel)
-    save_client(user_id, cfg)
-    context.user_data["active_channel_idx"] = existing_idx
-    await update.message.reply_text(f"✅ Channel saved: {channel}")
+    context.user_data["awaiting_channel_forward"] = True
+    await update.message.reply_text(tr(cfg, "ui_setchannel"))
 
 async def unsetchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -3582,6 +3631,7 @@ async def unsetchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     cfg["channel"] = None
     cfg["channels"] = []
     cfg["channel_settings"] = {}
+    cfg["channel_labels"] = {}
     save_client(user_id, cfg)
     context.user_data.pop("active_channel_idx", None)
     await send_menu(update, cfg, "✅ Channel cleared.")
@@ -3741,6 +3791,44 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(menu_text, reply_markup=submenu)
         return
 
+    if context.user_data.get("awaiting_channel_forward"):
+        channel, label = _extract_channel_from_forward(update.message)
+        if not channel:
+            await update.message.reply_text(ui_text(cfg, "channel_forward_invalid"))
+            return
+
+        channels = get_saved_channels(cfg)
+        slots = int(cfg.get("channel_slots", 0) or 0)
+        if channel not in channels and len(channels) >= slots:
+            context.user_data.pop("awaiting_channel_forward", None)
+            await send_menu(update, cfg, ui_text(cfg, "channel_slots_limit").format(count=len(channels), slots=slots))
+            return
+
+        try:
+            member = await context.bot.get_chat_member(chat_id=channel, user_id=context.bot.id)
+            if member.status not in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER):
+                await update.message.reply_text(ui_text(cfg, "channel_forward_admin_missing"))
+                return
+        except Exception:
+            await update.message.reply_text(ui_text(cfg, "channel_forward_access_error"))
+            return
+
+        existing_idx = channels.index(channel) if channel in channels else -1
+        if existing_idx == -1:
+            channels.append(channel)
+            existing_idx = len(channels) - 1
+        cfg["channels"] = channels
+        labels = cfg.get("channel_labels") if isinstance(cfg.get("channel_labels"), dict) else {}
+        if label:
+            labels[channel] = label
+        cfg["channel_labels"] = labels
+        switch_active_channel(cfg, channel)
+        save_client(user_id, cfg)
+        context.user_data["active_channel_idx"] = existing_idx
+        context.user_data.pop("awaiting_channel_forward", None)
+        await update.message.reply_text(ui_text(cfg, "channel_saved_named").format(channel=channel_display_name(cfg, channel)))
+        return
+
     text = (update.message.text or update.message.caption or "").strip()
     if not text:
         return
@@ -3777,11 +3865,14 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         selected_channel = (context.user_data.pop("awaiting_custom_emoji_channel", None) or "").strip()
         if selected_channel:
             switch_active_channel(cfg, selected_channel)
-        cfg[f"{awaiting_custom_emoji_mode}_custom_emojis_text"] = text
-        cfg[f"{awaiting_custom_emoji_mode}_custom_emojis_entities"] = [_message_entity_to_dict(entity) for entity in (update.message.entities or [])]
+        if _looks_like_link(text):
+            cfg[f"{awaiting_custom_emoji_mode}_custom_emojis_link"] = text
+        else:
+            cfg[f"{awaiting_custom_emoji_mode}_custom_emojis_text"] = text
+            cfg[f"{awaiting_custom_emoji_mode}_custom_emojis_entities"] = [_message_entity_to_dict(entity) for entity in (update.message.entities or [])]
         save_client(user_id, cfg)
-        submenu = build_creative_output_submenu(cfg) if awaiting_custom_emoji_mode == "creative" else build_rss_output_submenu(cfg)
-        await update.message.reply_text(ui_text(cfg, "emoji_saved") + "\n\n" + output_settings_text(cfg, awaiting_custom_emoji_mode), reply_markup=submenu)
+        submenu = build_emoji_management_submenu(cfg, awaiting_custom_emoji_mode)
+        await update.message.reply_text(ui_text(cfg, "emoji_saved") + "\n\n" + emoji_management_text(cfg, awaiting_custom_emoji_mode), reply_markup=submenu)
         return
 
     prompt_builder = context.user_data.get("prompt_builder")
