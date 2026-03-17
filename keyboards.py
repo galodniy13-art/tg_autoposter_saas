@@ -67,8 +67,8 @@ def build_channel_picker_menu(labels: dict, channels: list[str], action: str, ba
 def build_modes_menu(labels: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton(labels["mode_creative"], callback_data="ui:mode:creative:menu")],
             [InlineKeyboardButton(labels["mode_rss_ai"], callback_data="ui:mode:rss:menu")],
+            [InlineKeyboardButton(labels["mode_creative"], callback_data="ui:mode:creative:menu")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:setup")],
         ]
     )
@@ -165,26 +165,46 @@ def build_copy_style_review_menu(labels: dict, mode: str) -> InlineKeyboardMarku
     )
 
 
-def build_rss_output_menu(labels: dict, include_source_link: bool, use_feed_image: bool, cta_enabled: bool) -> InlineKeyboardMarkup:
+def build_rss_output_menu(labels: dict, include_source_link: bool, use_feed_image: bool, cta_enabled: bool, bold_title_enabled: bool) -> InlineKeyboardMarkup:
     source_label = labels["btn_source_link_on"] if include_source_link else labels["btn_source_link_off"]
     image_label = labels["btn_feed_image_on"] if use_feed_image else labels["btn_feed_image_off"]
     cta_label = labels["btn_rss_cta_on"] if cta_enabled else labels["btn_rss_cta_off"]
+    bold_label = labels["btn_bold_title_on"] if bold_title_enabled else labels["btn_bold_title_off"]
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton(source_label, callback_data="ui:rss:toggle_source_link")],
-            [InlineKeyboardButton(image_label, callback_data="ui:rss:toggle_feed_image")],
-            [InlineKeyboardButton(cta_label, callback_data="ui:rss:toggle_cta")],
-            [InlineKeyboardButton(labels["btn_edit_template_image"], callback_data="ui:rss:asset:template")],
-            [InlineKeyboardButton(labels["btn_edit_watermark"], callback_data="ui:rss:asset:watermark")],
+            [
+                InlineKeyboardButton(source_label, callback_data="ui:rss:toggle_source_link"),
+                InlineKeyboardButton(image_label, callback_data="ui:rss:toggle_feed_image"),
+            ],
+            [
+                InlineKeyboardButton(cta_label, callback_data="ui:rss:toggle_cta"),
+                InlineKeyboardButton(bold_label, callback_data="ui:rss:toggle_bold_title"),
+            ],
+            [
+                InlineKeyboardButton(labels["btn_edit_template_image"], callback_data="ui:rss:asset:template"),
+                InlineKeyboardButton(labels["btn_edit_watermark"], callback_data="ui:rss:asset:watermark"),
+            ],
+            [
+                InlineKeyboardButton(labels["btn_add_emoji"], callback_data="ui:rss:emoji:add"),
+                InlineKeyboardButton(labels["btn_delete_emoji"], callback_data="ui:rss:emoji:delete"),
+            ],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:rss:menu")],
         ]
     )
 
 
-def build_creative_output_menu(labels: dict) -> InlineKeyboardMarkup:
+def build_creative_output_menu(labels: dict, bold_title_enabled: bool) -> InlineKeyboardMarkup:
+    bold_label = labels["btn_bold_title_on"] if bold_title_enabled else labels["btn_bold_title_off"]
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton(labels["btn_edit_template_image"], callback_data="ui:creative:asset:template")],
+            [
+                InlineKeyboardButton(bold_label, callback_data="ui:creative:toggle_bold_title"),
+                InlineKeyboardButton(labels["btn_add_emoji"], callback_data="ui:creative:emoji:add"),
+            ],
+            [
+                InlineKeyboardButton(labels["btn_delete_emoji"], callback_data="ui:creative:emoji:delete"),
+                InlineKeyboardButton(labels["btn_edit_template_image"], callback_data="ui:creative:asset:template"),
+            ],
             [InlineKeyboardButton(labels["btn_edit_watermark"], callback_data="ui:creative:asset:watermark")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
         ]
