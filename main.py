@@ -880,6 +880,33 @@ def _is_too_small(width: int | None, height: int | None) -> bool:
     return False
 
 
+def _rss_image_quality_issue(img: Image.Image, image_url: str = "") -> str | None:
+    w, h = img.size
+    if w < 180 or h < 180:
+        return "too_small_dim"
+    if w * h < 90000:
+        return "too_small_area"
+
+    max_side = max(w, h)
+    min_side = min(w, h)
+    square_ratio = (max_side / max(1, min_side)) if min_side else 999
+    if square_ratio <= 1.15 and max_side <= 480:
+        return "small_square_like_logo"
+
+    if re.search(r"(?i)(logo|avatar|favicon|icon|profile|brandmark)", image_url or "") and max_side <= 720:
+        return "logo_like_url"
+
+    try:
+        sample = img.convert("RGB").resize((64, 64), Image.Resampling.BILINEAR)
+        palette = sample.getcolors(maxcolors=128)
+        if palette is not None and len(palette) <= 10 and square_ratio <= 1.2 and max_side <= 720:
+            return "flat_palette_logo_like"
+    except Exception:
+        pass
+
+    return None
+
+
 def _candidate_score(priority: int, url: str, width: int | None, height: int | None) -> tuple[int, int, int, int]:
     area = (width or 0) * (height or 0)
     has_size = 1 if width and height else 0
@@ -1171,6 +1198,11 @@ def _compose_rss_image_with_status(template_path: Path, rss_image_url: str, wate
         logger.warning("RSS preview source image download/open failed: %s", rss_image_url)
         return None, "rss_image_unusable"
 
+    quality_issue = _rss_image_quality_issue(rss_img, rss_image_url)
+    if quality_issue:
+        logger.info("RSS image rejected for composition (%s): %s", quality_issue, rss_image_url)
+        return None, "rss_image_rejected"
+
     try:
 
         canvas_w, canvas_h = base.size
@@ -1179,12 +1211,13 @@ def _compose_rss_image_with_status(template_path: Path, rss_image_url: str, wate
         area_w = max(1, canvas_w - 2 * margin_x)
         area_h = max(1, canvas_h - 2 * margin_y)
 
-        scale = max(area_w / max(1, rss_img.width), area_h / max(1, rss_img.height))
-        resized = rss_img.resize((max(1, int(rss_img.width * scale)), max(1, int(rss_img.height * scale))), Image.Resampling.LANCZOS)
-        crop_left = max(0, (resized.width - area_w) // 2)
-        crop_top = max(0, (resized.height - area_h) // 2)
-        fitted = resized.crop((crop_left, crop_top, crop_left + area_w, crop_top + area_h))
-        base.paste(fitted, (margin_x, margin_y), fitted)
+        scale = min(area_w / max(1, rss_img.width), area_h / max(1, rss_img.height))
+        fitted_w = max(1, int(rss_img.width * scale))
+        fitted_h = max(1, int(rss_img.height * scale))
+        fitted = rss_img.resize((fitted_w, fitted_h), Image.Resampling.LANCZOS)
+        paste_x = margin_x + max(0, (area_w - fitted_w) // 2)
+        paste_y = margin_y + max(0, (area_h - fitted_h) // 2)
+        base.paste(fitted, (paste_x, paste_y), fitted)
 
         if watermark_path and watermark_path.exists() and watermark_path.is_file():
             try:
@@ -1231,8 +1264,10 @@ async def prepare_rss_image_for_sending(bot, cfg: dict, user_id: int, image_url:
 
     watermark_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "watermark")
     watermark_path = (BASE_DIR / watermark_rel) if watermark_rel else None
-    composed_path = _compose_rss_image(template_path, image_url, watermark_path)
+    composed_path, compose_error = _compose_rss_image_with_status(template_path, image_url, watermark_path)
     if not composed_path:
+        if compose_error in {"rss_image_unusable", "rss_image_rejected", "compose_failed"}:
+            return None, None
         return image_url, None
     return str(composed_path), composed_path
 
@@ -1266,7 +1301,7 @@ async def prepare_rss_preview_image_for_sending(bot, cfg: dict, user_id: int, im
 
     composed_path, compose_error = _compose_rss_image_with_status(template_path, image_url, watermark_path)
     if not composed_path:
-        if compose_error == "rss_image_unusable":
+        if compose_error in {"rss_image_unusable", "rss_image_rejected"}:
             return None, None, "preview_status_no_rss_image_text_only"
         if compose_error in {"template_load_failed", "watermark_load_failed"}:
             return image_url, None, "preview_status_asset_load_failed_normal"
