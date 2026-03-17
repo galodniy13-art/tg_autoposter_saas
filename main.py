@@ -520,6 +520,7 @@ def load_client(user_id: int) -> dict:
     normalize_channels(cfg)
     ensure_channel_settings(cfg)
     apply_active_channel_settings(cfg)
+    normalize_legacy_prompts(cfg)
     # Persist one-time upgrades so legacy client JSON files move to canonical schema.
     if json.dumps(cfg, ensure_ascii=False, sort_keys=True) != before_normalize:
         save_client(user_id, cfg)
@@ -530,8 +531,33 @@ def save_client(user_id: int, cfg: dict) -> None:
         cfg.setdefault(k, v)
     normalize_channels(cfg)
     ensure_channel_settings(cfg)
+    normalize_legacy_prompts(cfg)
     persist_active_channel_settings(cfg)
     client_path(user_id).write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def normalize_legacy_prompts(cfg: dict) -> None:
+    legacy_prompt = ""
+    for legacy_key in ("prompt", "style_prompt"):
+        candidate = (cfg.get(legacy_key) or "").strip()
+        if candidate:
+            legacy_prompt = candidate
+            break
+    if not legacy_prompt:
+        return
+
+    for mode in ("rss", "creative"):
+        key = prompt_key_for_mode(mode)
+        if not (cfg.get(key) or "").strip():
+            cfg[key] = legacy_prompt
+
+    for bucket in (cfg.get("channel_settings") or {}).values():
+        if not isinstance(bucket, dict):
+            continue
+        for mode in ("rss", "creative"):
+            key = prompt_key_for_mode(mode)
+            if not (bucket.get(key) or "").strip():
+                bucket[key] = legacy_prompt
 
 
 def normalize_channels(cfg: dict) -> list[str]:
@@ -746,7 +772,7 @@ def get_style_prompt(user_id: int, cfg: dict) -> str:
 
 
 def get_mode_prompt(user_id: int, cfg: dict, mode: str) -> str:
-    key = "creative_prompt" if mode == "creative" else "rss_prompt"
+    key = prompt_key_for_mode(mode)
     prompt = (cfg.get(key) or "").strip()
     if prompt:
         return prompt
@@ -766,6 +792,14 @@ def get_mode_prompt(user_id: int, cfg: dict, mode: str) -> str:
     if mode == "creative":
         return "Write a Telegram-ready post in plain text. No JSON, no code blocks."
     return "Rewrite the source into a Telegram-ready post in plain text. No JSON, no code blocks."
+
+
+def prompt_key_for_mode(mode: str) -> str:
+    return "creative_prompt" if mode == "creative" else "rss_prompt"
+
+
+def set_mode_prompt(cfg: dict, mode: str, prompt: str) -> None:
+    cfg[prompt_key_for_mode(mode)] = prompt
 
 def sanitize_llm_post(text: str, cfg: dict, link: str) -> str:
     t = (text or "").replace("\r", "").strip()
@@ -3350,8 +3384,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             selected_channel = (builder.get("selected_channel") or "").strip()
             if selected_channel:
                 switch_active_channel(cfg, selected_channel)
-            prompt_key = "creative_prompt" if mode == "creative" else "rss_prompt"
-            cfg[prompt_key] = generated
+            set_mode_prompt(cfg, mode, generated)
             save_client(user_id, cfg)
             context.user_data.pop("prompt_builder", None)
             await q.answer()
@@ -3396,8 +3429,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             switch_active_channel(cfg, selected_channel)
 
         if action == "save":
-            prompt_key = "creative_prompt" if mode == "creative" else "rss_prompt"
-            cfg[prompt_key] = generated
+            set_mode_prompt(cfg, mode, generated)
             save_client(user_id, cfg)
             context.user_data.pop("copy_style_review", None)
             await q.answer()
@@ -3980,8 +4012,7 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         if awaiting_prompt_channel:
             switch_active_channel(cfg, awaiting_prompt_channel)
-        prompt_key = "creative_prompt" if awaiting_prompt_mode == "creative" else "rss_prompt"
-        cfg[prompt_key] = text
+        set_mode_prompt(cfg, awaiting_prompt_mode, text)
         save_client(user_id, cfg)
         await send_prompt_parent_menu(update, cfg, awaiting_prompt_mode, ui_text(cfg, "prompt_edit_saved"))
         return
