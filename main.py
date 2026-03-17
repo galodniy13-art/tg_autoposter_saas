@@ -1962,6 +1962,18 @@ def feeds_overview(cfg: dict) -> str:
     return "🧾 Feeds:\n" + "\n".join(lines)
 
 
+def feed_management_text(cfg: dict, selected_channel: str) -> str:
+    return (
+        ui_text(cfg, "channel_selected_now").format(channel=selected_channel)
+        + "\n\n"
+        + ui_text(cfg, "feed_management_title")
+        + "\n"
+        + ui_text(cfg, "feed_management_help")
+        + "\n\n"
+        + feeds_overview(cfg)
+    )
+
+
 def build_feeds_delete_menu(cfg: dict) -> InlineKeyboardMarkup:
     return build_feed_delete_menu(ui_pack(cfg), cfg.get("feeds", []))
 
@@ -3102,15 +3114,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 reply_markup=build_channel_picker(cfg, "rss_feeds", "ui:mode:rss:menu"),
             )
             return
-        text = (
-            ui_text(cfg, "channel_selected_now").format(channel=selected)
-            + "\n\n"
-            + ui_text(cfg, "feed_management_title")
-            + "\n"
-            + ui_text(cfg, "feed_management_help")
-            + "\n\n"
-            + feeds_overview(cfg)
-        )
+        text = feed_management_text(cfg, selected)
         await q.answer()
         try:
             await q.edit_message_text(text=text, reply_markup=build_feed_menu(cfg))
@@ -3516,6 +3520,19 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await send_menu(update, cfg, "Wrong feed index.")
             return
 
+        selected, state = require_channel_context(cfg, context, "rss_feeds")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "rss_feeds", "ui:mode:rss:menu"),
+            )
+            return
+
         feeds = cfg.get("feeds", [])
         if idx < 0 or idx >= len(feeds):
             await send_menu(update, cfg, "Wrong feed index.")
@@ -3524,7 +3541,12 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         feeds.pop(idx)
         cfg["feeds"] = feeds
         save_client(user_id, cfg)
-        await send_menu(update, cfg, ui_text(cfg, "feed_deleted") + "\n\n" + feeds_overview(cfg))
+        text = ui_text(cfg, "feed_deleted") + "\n\n" + feed_management_text(cfg, selected)
+        await q.answer()
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_feed_menu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_feed_menu(cfg))
         return
 
     if data == "ui:backmain":
@@ -4042,7 +4064,14 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             feeds.append({"url": url, "name": feed_name} if feed_name else url)
             cfg["feeds"] = feeds
             save_client(user_id, cfg)
-            await send_menu(update, cfg, ui_text(cfg, "feed_added") + "\n\n" + feeds_overview(cfg))
+            selected, state = require_channel_context(cfg, context, "rss_feeds")
+            if selected and state is None:
+                await update.message.reply_text(
+                    ui_text(cfg, "feed_added") + "\n\n" + feed_management_text(cfg, selected),
+                    reply_markup=build_feed_menu(cfg),
+                )
+            else:
+                await send_menu(update, cfg, ui_text(cfg, "feed_added") + "\n\n" + feeds_overview(cfg))
             return
 
         context.user_data["awaiting_feed_add"] = "name"
@@ -4163,10 +4192,9 @@ async def addfeed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text("Feed read failed (no entries). Check the URL.")
         return
 
-    feeds.append(url)
-    cfg["feeds"] = feeds
-    save_client(user_id, cfg)
-    await update.message.reply_text(f"✅ Feed added. Total: {len(feeds)}")
+    context.user_data["awaiting_feed_add"] = "name"
+    context.user_data["pending_feed_url"] = url
+    await update.message.reply_text(ui_text(cfg, "feed_name_prompt"))
 
 async def feeds_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
