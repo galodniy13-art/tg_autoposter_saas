@@ -15,7 +15,10 @@ TEXTS = {
             "• 20 posts/day — $13/month\n• 40 posts/day — $20/month\n\n"
             "Channel slots are purchased separately (how many channels you can connect).\n"
             "You can combine RSS + Creative access.\n"
-            "To activate, message: @a_karaglan, @a_karaglanov",
+            "To activate, message: @a_karaglan, @a_karaglanov\n\n"
+            "🔻 Discount for upfront payment\n\n"
+            "• 3 months — −10%\n"
+            "• 6 months — −20%",
         "btn_modes": "🧠 Modes",
         "btn_scheduling": "🕒 Scheduling",
         "modes_title": "🧠 Modes. Choose a mode settings section:",
@@ -30,7 +33,10 @@ TEXTS = {
             "• 10/day — $8/month\n"
             "• 20/day — $13/month\n• 40/day — $20/month\n\n"
             "Channel slots are managed separately.\n"
-            "To activate, message: @a_karaglan, @a_karaglanov",
+            "To activate, message: @a_karaglan, @a_karaglanov\n\n"
+            "🔻 Discount for upfront payment\n\n"
+            "• 3 months — −10%\n"
+            "• 6 months — −20%",
         "rss_paywall":
             "RSS mode pricing (USD/month):\n"
             "(Account-wide daily limit shared across all connected channels)\n"
@@ -38,7 +44,10 @@ TEXTS = {
             "• 10/day — $5/month\n"
             "• 20/day — $8/month\n• 40/day — $12/month\n\n"
             "Channel slots are managed separately.\n"
-            "To activate, message: @a_karaglan, @a_karaglanov",
+            "To activate, message: @a_karaglan, @a_karaglanov\n\n"
+            "🔻 Discount for upfront payment\n\n"
+            "• 3 months — −10%\n"
+            "• 6 months — −20%",
         "mode_set_rss": "✅ Mode set: 📰 RSS + AI",
         "mode_set_creator": "✅ Mode set: ✨ Creative",
         "btn_payment": "💳 Buy posting plan",
@@ -50,8 +59,8 @@ TEXTS = {
         "scheduling_menu_title": "🕒 Scheduling:",
         "channel_management_title": "📺 Channel management:",
         "modes_menu_title": "🧠 Modes settings:",
-        "creative_menu_title": "✨ Creative settings\n\n1) ✍️ Set your prompt (or use Guided Prompt Builder).\n2) 🎛 Tune Content Variety if needed.\n3) 🕒 Open Scheduling and choose: Scheduled Times or Interval.\n4) ✅ For Scheduled Times, add slots and turn Scheduling ON.\n5) 🚀 Run /autoposton to start posting (next slot or by interval).\n6) 🧪 Tap Preview to check the final result.",
-        "rss_menu_title": "📰 RSS + AI settings\n\n1) ✍️ Set your prompt.\n2) 🧾 Add feeds for news sources.\n3) 🧩 Open Post Format and tune output.\n4) 🕒 Open Scheduling and choose: Scheduled Times or Interval.\n5) ✅ For Scheduled Times, add slots and turn Scheduling ON.\n6) 🚀 Run /autoposton to start posting (next slot or by interval).\n7) 🧪 Tap Preview to check the final result.",
+        "creative_menu_title": "✨ Creative settings\n\n✍️ Set your prompt (or use Guided Prompt Builder).\n🎛 Tune Content Variety if needed.\n🕒 Open Scheduling and choose: Scheduled Times or Interval.\n✅ For Scheduled Times, add slots and turn Scheduling ON.\n🚀 Run /autoposton to start posting (next slot or by interval).\n🧪 Tap Preview to check the final result.",
+        "rss_menu_title": "📰 RSS + AI settings\n\n✍️ Set your prompt.\n🧾 Add feeds for news sources.\n🧩 Open Post Format and tune output.\n🕒 Open Scheduling and choose: Scheduled Times or Interval.\n✅ For Scheduled Times, add slots and turn Scheduling ON.\n🚀 Run /autoposton to start posting (next slot or by interval).\n🧪 Tap Preview to check the final result.",
         "schedule_mode_title_rss": "📰 RSS + AI schedule",
         "schedule_mode_title_creative": "✨ Creative schedule",
         "schedule_current": "Current schedule:\n{schedule}",
@@ -81,6 +90,7 @@ TEXTS = {
         "preview_status_asset_load_failed_normal": "Could not load the template or watermark. Showing normal preview.",
         "feed_management_title": "🧾 Feed management:",
         "feed_management_help": "Tip: Want to use an X/Twitter profile as a source? Convert the profile link to RSS at https://rss.app/ and paste the generated RSS link here.",
+        "feed_name_prompt": "Send a short name for this feed, or send \"-\" to skip.",
         "btn_lang": "🌐 Language",
         "choose_lang": "Choose your language:",
         "btn_setup": "🛠 Setup",
@@ -299,7 +309,10 @@ TEXTS = {
             "• 20 постов/день — $13/месяц\n• 40 постов/день — $20/месяц\n\n"
             "Слоты каналов покупаются отдельно (сколько каналов можно подключить).\n"
             "Можно комбинировать RSS + Creative доступ.\n"
-            "Для активации напишите: @a_karaglan, @a_karaglanov",
+            "Для активации напишите: @a_karaglan, @a_karaglanov\n\n"
+            "🔻 Скидка при оплате сразу\n\n"
+            "• 3 месяца — −10%\n"
+            "• 6 месяцев — −20%",
         "btn_modes": "🧠 Режимы",
         "btn_scheduling": "🕒 Расписание",
         "modes_title": "🧠 Режимы. Выберите раздел настроек:",
@@ -314,7 +327,10 @@ TEXTS = {
             "• 10/день — $8/месяц\n"
             "• 20/день — $13/месяц\n• 40/день — $20/месяц\n\n"
             "Слоты каналов управляются отдельно.\n"
-            "Для активации напишите: @a_karaglan, @a_karaglanov",
+            "Для активации напишите: @a_karaglan, @a_karaglanov\n\n"
+            "🔻 Скидка при оплате сразу\n\n"
+            "• 3 месяца — −10%\n"
+            "• 6 месяцев — −20%",
         "rss_paywall":
             "Стоимость RSS-режима (USD/месяц):\n"
             "(Дневной лимит на аккаунт, общий для всех подключённых каналов)\n"
@@ -322,7 +338,10 @@ TEXTS = {
             "• 10/день — $5/месяц\n"
             "• 20/день — $8/месяц\n• 40/день — $12/месяц\n\n"
             "Слоты каналов управляются отдельно.\n"
-            "Для активации напишите: @a_karaglan, @a_karaglanov",
+            "Для активации напишите: @a_karaglan, @a_karaglanov\n\n"
+            "🔻 Скидка при оплате сразу\n\n"
+            "• 3 месяца — −10%\n"
+            "• 6 месяцев — −20%",
         "mode_set_rss": "✅ Режим установлен: 📰 RSS + AI",
         "mode_set_creator": "✅ Режим установлен: ✨ Creative",
         "btn_payment": "💳 Купить пакет постов",
@@ -334,8 +353,8 @@ TEXTS = {
         "scheduling_menu_title": "🕒 Расписание:",
         "channel_management_title": "📺 Управление каналом:",
         "modes_menu_title": "🧠 Настройки режимов:",
-        "creative_menu_title": "✨ Настройки Creative\n\n1) ✍️ Задайте промпт (или используйте конструктор).\n2) 🎛 При необходимости настройте Разнообразие контента.\n3) 🕒 Откройте Расписание и выберите: По времени или По интервалу.\n4) ✅ Для режима По времени задайте слоты и включите Расписание.\n5) 🚀 Выполните /autoposton для запуска публикаций (в ближайший слот или по интервалу).\n6) 🧪 Нажмите Превью, чтобы посмотреть итог.",
-        "rss_menu_title": "📰 Настройки RSS + AI\n\n1) ✍️ Задайте промпт.\n2) 🧾 Добавьте ленты-источники.\n3) 🧩 Откройте Формат поста и настройте вывод.\n4) 🕒 Откройте Расписание и выберите: По времени или По интервалу.\n5) ✅ Для режима По времени задайте слоты и включите Расписание.\n6) 🚀 Выполните /autoposton для запуска публикаций (в ближайший слот или по интервалу).\n7) 🧪 Нажмите Превью, чтобы посмотреть итог.",
+        "creative_menu_title": "✨ Настройки Creative\n\n✍️ Задайте промпт (или используйте конструктор).\n🎛 При необходимости настройте Разнообразие контента.\n🕒 Откройте Расписание и выберите: По времени или По интервалу.\n✅ Для режима По времени задайте слоты и включите Расписание.\n🚀 Выполните /autoposton для запуска публикаций (в ближайший слот или по интервалу).\n🧪 Нажмите Превью, чтобы посмотреть итог.",
+        "rss_menu_title": "📰 Настройки RSS + AI\n\n✍️ Задайте промпт.\n🧾 Добавьте ленты-источники.\n🧩 Откройте Формат поста и настройте вывод.\n🕒 Откройте Расписание и выберите: По времени или По интервалу.\n✅ Для режима По времени задайте слоты и включите Расписание.\n🚀 Выполните /autoposton для запуска публикаций (в ближайший слот или по интервалу).\n🧪 Нажмите Превью, чтобы посмотреть итог.",
         "schedule_mode_title_rss": "📰 Расписание RSS + AI",
         "schedule_mode_title_creative": "✨ Расписание Creative",
         "schedule_current": "Текущее расписание:\n{schedule}",
@@ -365,6 +384,7 @@ TEXTS = {
         "preview_status_asset_load_failed_normal": "Не удалось загрузить шаблон или водяной знак. Показываю обычное превью.",
         "feed_management_title": "🧾 Управление лентами:",
         "feed_management_help": "Подсказка: хотите использовать профиль X/Twitter как источник? Преобразуйте ссылку на профиль в RSS через https://rss.app/ и вставьте полученную RSS-ссылку сюда.",
+        "feed_name_prompt": "Отправьте короткое название для этой ленты или отправьте \"-\" чтобы пропустить.",
         "btn_lang": "🌐 Язык",
         "choose_lang": "Выберите язык:",
         "btn_setup": "🛠 Настройка",
