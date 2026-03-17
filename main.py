@@ -374,6 +374,9 @@ DEFAULT_CLIENT = {
     "rss_cta_enabled": False,
     "rss_cta_text": "",
     "rss_cta_entities": [],
+    "rss_bold_title": False,
+    "rss_custom_emojis_text": "",
+    "rss_custom_emojis_entities": [],
     "rss_template_file_id": "",
     "rss_template_image_path": "",
     "rss_watermark_file_id": "",
@@ -382,6 +385,9 @@ DEFAULT_CLIENT = {
     "creative_template_image_path": "",
     "creative_watermark_file_id": "",
     "creative_watermark_image_path": "",
+    "creative_bold_title": False,
+    "creative_custom_emojis_text": "",
+    "creative_custom_emojis_entities": [],
 
     "autopost_enabled": False,
     "interval_minutes": 30,
@@ -427,6 +433,9 @@ CHANNEL_SCOPED_KEYS = (
     "rss_cta_enabled",
     "rss_cta_text",
     "rss_cta_entities",
+    "rss_bold_title",
+    "rss_custom_emojis_text",
+    "rss_custom_emojis_entities",
     "rss_template_file_id",
     "rss_template_image_path",
     "rss_watermark_file_id",
@@ -435,6 +444,9 @@ CHANNEL_SCOPED_KEYS = (
     "creative_template_image_path",
     "creative_watermark_file_id",
     "creative_watermark_image_path",
+    "creative_bold_title",
+    "creative_custom_emojis_text",
+    "creative_custom_emojis_entities",
     "rss_schedule_enabled",
     "rss_schedule_times",
     "rss_last_schedule_date",
@@ -953,21 +965,55 @@ def _load_message_entities(data: list | None, offset_shift: int = 0, min_offset:
     return entities
 
 
+def _first_nonempty_line_bounds(text: str) -> tuple[int, int] | None:
+    start = 0
+    for line in text.splitlines(keepends=True):
+        end = start + len(line)
+        content = line.rstrip("\r\n")
+        if content.strip():
+            return start, start + len(content)
+        start = end
+    return None
+
+
+def apply_bold_title(text: str, entities: list[MessageEntity]) -> list[MessageEntity]:
+    bounds = _first_nonempty_line_bounds(text)
+    if not bounds:
+        return entities
+    start, end = bounds
+    title_has_bold = any(
+        e.type == MessageEntity.BOLD and e.offset <= start and (e.offset + e.length) >= end
+        for e in entities
+    )
+    if title_has_bold:
+        return entities
+    return entities + [MessageEntity(type=MessageEntity.BOLD, offset=start, length=end - start)]
+
+
+def emoji_style_note(cfg: dict, mode: str) -> str:
+    text = (cfg.get(f"{mode}_custom_emojis_text") or "").strip()
+    if not text:
+        return ""
+    return f"Preferred emoji style: you may naturally use these emoji when relevant: {text}\n"
+
+
 def build_rss_message_payload(cfg: dict, msg: str, link: str) -> tuple[str, list[MessageEntity]]:
     base_text = msg
     if bool(cfg.get("include_rss_source_link", True)):
         base_text = f"{base_text}\n\n{link}"
 
-    if not bool(cfg.get("rss_cta_enabled", False)):
-        return base_text, []
+    entities: list[MessageEntity] = []
+    if bool(cfg.get("rss_cta_enabled", False)):
+        cta_text = cfg.get("rss_cta_text") or ""
+        if cta_text.strip():
+            prefix = f"{base_text}\n\n"
+            entities = _load_message_entities(cfg.get("rss_cta_entities"), offset_shift=len(prefix))
+            base_text = prefix + cta_text
 
-    cta_text = cfg.get("rss_cta_text") or ""
-    if not cta_text.strip():
-        return base_text, []
+    if bool(cfg.get("rss_bold_title", False)):
+        entities = apply_bold_title(base_text, entities)
 
-    prefix = f"{base_text}\n\n"
-    entities = _load_message_entities(cfg.get("rss_cta_entities"), offset_shift=len(prefix))
-    return prefix + cta_text, entities
+    return base_text, entities
 
 
 async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str, image_url: str | None, temp_file: Path | None = None) -> None:
@@ -1166,6 +1212,7 @@ def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link
         f"Title: {title}\n"
         f"Summary: {summary}\n"
         f"{source_block}"
+        f"{emoji_style_note(cfg, 'rss')}"
     )
 
     payload = {"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}
@@ -1201,6 +1248,7 @@ def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: st
         "Use only facts from the source content. Do not invent details.\n"
         "Do not include source attribution, usernames, raw metadata, or links unless explicitly requested in the prompt/output settings.\n"
         "Return plain Telegram-ready text (no JSON, no code blocks). Preserve requested paragraph spacing and formatting."
+        f"\n{emoji_style_note(cfg, 'rss')}"
     )
 
     url = OPENAI_BASE_URL.rstrip("/") + "/chat/completions"
@@ -1476,6 +1524,7 @@ def creator_make_post(user_id: int, cfg: dict) -> str:
         f"Creator profile:\n{profile}\n\n"
         f"Post type for this generation: {post_type}.\n"
         f"{variation_guidance[variation]}\n"
+        f"{emoji_style_note(cfg, 'creative')}"
     )
 
     if avoid_repetition:
@@ -1573,11 +1622,12 @@ def build_rss_output_submenu(cfg: dict) -> InlineKeyboardMarkup:
         bool(cfg.get("include_rss_source_link", True)),
         bool(cfg.get("use_rss_feed_image", True)),
         bool(cfg.get("rss_cta_enabled", False)),
+        bool(cfg.get("rss_bold_title", False)),
     )
 
 
 def build_creative_output_submenu(cfg: dict) -> InlineKeyboardMarkup:
-    return build_creative_output_menu(ui_pack(cfg))
+    return build_creative_output_menu(ui_pack(cfg), bool(cfg.get("creative_bold_title", False)))
 
 
 def build_asset_management_submenu(cfg: dict, mode: str, asset_type: str) -> InlineKeyboardMarkup:
@@ -1590,7 +1640,14 @@ def post_format_assets_text(cfg: dict, mode: str) -> str:
     watermark_key = f"{mode}_watermark_file_id"
     template_status = ui_text(cfg, "status_added") if cfg.get(template_key) else ui_text(cfg, "status_not_added")
     watermark_status = ui_text(cfg, "status_added") if cfg.get(watermark_key) else ui_text(cfg, "status_not_added")
-    return ui_text(cfg, "post_format_assets_info").format(template=template_status, watermark=watermark_status)
+    bold_status = ui_text(cfg, "label_on") if bool(cfg.get(f"{mode}_bold_title", False)) else ui_text(cfg, "label_off")
+    emoji_status = ui_text(cfg, "status_added") if (cfg.get(f"{mode}_custom_emojis_text") or "").strip() else ui_text(cfg, "status_not_added")
+    return ui_text(cfg, "post_format_assets_info").format(
+        template=template_status,
+        watermark=watermark_status,
+        bold_title=bold_status,
+        emoji=emoji_status,
+    )
 
 
 def output_settings_text(cfg: dict, mode: str) -> str:
@@ -2299,8 +2356,11 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 return
 
             try:
+                preview_prefix = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + "🧪 Preview:\n\n"
+                creator_entities = apply_bold_title(msg, []) if bool(cfg.get("creative_bold_title", False)) else []
                 await q.message.reply_text(
-                    ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + "🧪 Preview:\n\n" + msg,
+                    preview_prefix + msg,
+                    entities=_load_message_entities([_message_entity_to_dict(e) for e in creator_entities], offset_shift=len(preview_prefix)) or None,
                     reply_markup=build_creative_submenu(cfg),
                 )
             except Exception:
@@ -2659,6 +2719,62 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.edit_message_text(text=text, reply_markup=build_rss_output_submenu(cfg))
         except BadRequest:
             await q.message.reply_text(text=text, reply_markup=build_rss_output_submenu(cfg))
+        return
+
+    if data in ("ui:rss:toggle_bold_title", "ui:creative:toggle_bold_title"):
+        mode = "creative" if data.startswith("ui:creative") else "rss"
+        key = f"{mode}_bold_title"
+        cfg[key] = not bool(cfg.get(key, False))
+        save_client(user_id, cfg)
+        await q.answer()
+        text = output_settings_text(cfg, mode)
+        submenu = build_creative_output_submenu(cfg) if mode == "creative" else build_rss_output_submenu(cfg)
+        try:
+            await q.edit_message_text(text=text, reply_markup=submenu)
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=submenu)
+        return
+
+    if data in ("ui:rss:emoji:add", "ui:creative:emoji:add"):
+        mode = "creative" if data.startswith("ui:creative") else "rss"
+        action = "creative_output" if mode == "creative" else "rss_output"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_title"), reply_markup=build_channel_picker(cfg, action, f"ui:mode:{mode}:menu"))
+            return
+        context.user_data["awaiting_custom_emoji_mode"] = mode
+        context.user_data["awaiting_custom_emoji_channel"] = selected
+        await q.answer()
+        await q.message.reply_text(ui_text(cfg, "emoji_prompt_send"))
+        return
+
+    if data in ("ui:rss:emoji:delete", "ui:creative:emoji:delete"):
+        mode = "creative" if data.startswith("ui:creative") else "rss"
+        action = "creative_output" if mode == "creative" else "rss_output"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_title"), reply_markup=build_channel_picker(cfg, action, f"ui:mode:{mode}:menu"))
+            return
+        cfg[f"{mode}_custom_emojis_text"] = ""
+        cfg[f"{mode}_custom_emojis_entities"] = []
+        save_client(user_id, cfg)
+        await q.answer()
+        text = ui_text(cfg, "emoji_deleted") + "\n\n" + output_settings_text(cfg, mode)
+        submenu = build_creative_output_submenu(cfg) if mode == "creative" else build_rss_output_submenu(cfg)
+        try:
+            await q.edit_message_text(text=text, reply_markup=submenu)
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=submenu)
         return
 
     if data == "ui:creative:output":
@@ -3623,6 +3739,19 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
+    awaiting_custom_emoji_mode = context.user_data.get("awaiting_custom_emoji_mode")
+    if awaiting_custom_emoji_mode:
+        context.user_data.pop("awaiting_custom_emoji_mode", None)
+        selected_channel = (context.user_data.pop("awaiting_custom_emoji_channel", None) or "").strip()
+        if selected_channel:
+            switch_active_channel(cfg, selected_channel)
+        cfg[f"{awaiting_custom_emoji_mode}_custom_emojis_text"] = text
+        cfg[f"{awaiting_custom_emoji_mode}_custom_emojis_entities"] = [_message_entity_to_dict(entity) for entity in (update.message.entities or [])]
+        save_client(user_id, cfg)
+        submenu = build_creative_output_submenu(cfg) if awaiting_custom_emoji_mode == "creative" else build_rss_output_submenu(cfg)
+        await update.message.reply_text(ui_text(cfg, "emoji_saved") + "\n\n" + output_settings_text(cfg, awaiting_custom_emoji_mode), reply_markup=submenu)
+        return
+
     prompt_builder = context.user_data.get("prompt_builder")
     if prompt_builder:
         mode = prompt_builder.get("mode")
@@ -3964,7 +4093,9 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if mode == "creator":
         msg = creator_make_post(user_id, cfg)
         save_client(user_id, cfg)
-        await reply_ui(update, "🧪 Preview:\n\n" + msg, cfg, show_menu=True)
+        creator_entities = apply_bold_title(msg, []) if bool(cfg.get("creative_bold_title", False)) else []
+        preview_prefix = "🧪 Preview:\n\n"
+        await update.message.reply_text(preview_prefix + msg, entities=_load_message_entities([_message_entity_to_dict(e) for e in creator_entities], offset_shift=len(preview_prefix)) or None, reply_markup=build_main_menu_clean(cfg))
         return
 
     feeds = cfg.get("feeds", [])
@@ -3973,11 +4104,13 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         creator_msg = creator_make_post(user_id, cfg)
         save_client(user_id, cfg)
         if not feeds:
-            await reply_ui(update, "🧪 Preview (creator):\n\n" + creator_msg, cfg, show_menu=True)
+            creator_entities = apply_bold_title(creator_msg, []) if bool(cfg.get("creative_bold_title", False)) else []
+            await update.message.reply_text("🧪 Preview (creator):\n\n" + creator_msg, entities=_load_message_entities([_message_entity_to_dict(e) for e in creator_entities], offset_shift=len("🧪 Preview (creator):\n\n")) or None, reply_markup=build_main_menu_clean(cfg))
             return
         best = pick_newest_unseen(cfg)
         if not best:
-            await reply_ui(update, "🧪 Preview (creator):\n\n" + creator_msg, cfg, show_menu=True)
+            creator_entities = apply_bold_title(creator_msg, []) if bool(cfg.get("creative_bold_title", False)) else []
+            await update.message.reply_text("🧪 Preview (creator):\n\n" + creator_msg, entities=_load_message_entities([_message_entity_to_dict(e) for e in creator_entities], offset_shift=len("🧪 Preview (creator):\n\n")) or None, reply_markup=build_main_menu_clean(cfg))
             return
         _, title, link, src = best
         summary = extract_summary_for_link(src, link)
@@ -4040,7 +4173,8 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     if mode == "creator":
         msg = creator_make_post(user_id, cfg)
-        await context.bot.send_message(chat_id=channel, text=msg)
+        creator_entities = apply_bold_title(msg, []) if bool(cfg.get("creative_bold_title", False)) else []
+        await context.bot.send_message(chat_id=channel, text=msg, entities=creator_entities or None)
         bump_daily_count(cfg, "creator")
         save_client(user_id, cfg)
         await reply_ui(update, "✅ Posted 1 creator post.", cfg, show_menu=True)
@@ -4064,7 +4198,8 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
 
         msg = creator_make_post(user_id, cfg)
-        await context.bot.send_message(chat_id=channel, text=msg)
+        creator_entities = apply_bold_title(msg, []) if bool(cfg.get("creative_bold_title", False)) else []
+        await context.bot.send_message(chat_id=channel, text=msg, entities=creator_entities or None)
         bump_daily_count(cfg, "creator")
         save_client(user_id, cfg)
         await reply_ui(update, "✅ Posted 1 creator post (both mode fallback).", cfg, show_menu=True)
@@ -4415,7 +4550,8 @@ async def autopost_loop(app: Application) -> None:
                     if not should_run_mode_now(cfg, "creative", now, last_post_at, user_id):
                         continue
                     msg = creator_make_post(user_id, cfg)
-                    await app.bot.send_message(chat_id=channel, text=msg)
+                    creator_entities = apply_bold_title(msg, []) if bool(cfg.get("creative_bold_title", False)) else []
+                    await app.bot.send_message(chat_id=channel, text=msg, entities=creator_entities or None)
                     bump_daily_count(cfg, "creator")
                     mark_mode_scheduled(cfg, "creative", now)
                     save_client(user_id, cfg)
@@ -4430,7 +4566,8 @@ async def autopost_loop(app: Application) -> None:
                     if not should_run_mode_now(cfg, "creative", now, last_post_at, user_id):
                         continue
                     msg = creator_make_post(user_id, cfg)
-                    await app.bot.send_message(chat_id=channel, text=msg)
+                    creator_entities = apply_bold_title(msg, []) if bool(cfg.get("creative_bold_title", False)) else []
+                    await app.bot.send_message(chat_id=channel, text=msg, entities=creator_entities or None)
                     bump_daily_count(cfg, "creator")
                     mark_mode_scheduled(cfg, "creative", now)
                     save_client(user_id, cfg)
