@@ -59,8 +59,8 @@ TEXTS = {
         "scheduling_menu_title": "🕒 Scheduling:",
         "channel_management_title": "📺 Channel management:",
         "modes_menu_title": "🧠 Modes settings:",
-        "creative_menu_title": "✨ Creative settings\n\n✍️ Set your prompt (or use Guided Prompt Builder).\n🎛 Tune Content Variety if needed.\n🕒 Open Scheduling and choose: Scheduled Times or Interval.\n✅ For Scheduled Times, add slots and turn Scheduling ON.\n🚀 Run /autoposton to start posting (next slot or by interval).\n🧪 Tap Preview to check the final result.",
-        "rss_menu_title": "📰 RSS + AI settings\n\n✍️ Set your prompt.\n🧾 Add feeds for news sources.\n🧩 Open Post Format and tune output.\n🕒 Open Scheduling and choose: Scheduled Times or Interval.\n✅ For Scheduled Times, add slots and turn Scheduling ON.\n🚀 Run /autoposton to start posting (next slot or by interval).\n🧪 Tap Preview to check the final result.",
+        "creative_menu_title": "✨ Creative settings\n\n✍️ Set your prompt (or use Guided Prompt Builder).\n🎛 Tune Content Variety if needed.\n🕒 Open Scheduling and choose: Scheduled Times or Interval.\n✅ For Scheduled Times, add slots and turn Scheduling ON.\n🚀 Run /autoposton to start posting (next slot or by interval).\n🧪 Tap Preview to check the final result.\n⚠️ Scheduling and quiet hours use your selected timezone.",
+        "rss_menu_title": "📰 RSS + AI settings\n\n✍️ Set your prompt.\n🧾 Add feeds for news sources.\n🧩 Open Post Format and tune output.\n🕒 Open Scheduling and choose: Scheduled Times or Interval.\n✅ For Scheduled Times, add slots and turn Scheduling ON.\n🚀 Run /autoposton to start posting (next slot or by interval).\n🧪 Tap Preview to check the final result.\n⚠️ Scheduling and quiet hours use your selected timezone.",
         "schedule_mode_title_rss": "📰 RSS + AI schedule",
         "schedule_mode_title_creative": "✨ Creative schedule",
         "schedule_current": "Current schedule:\n{schedule}",
@@ -191,6 +191,7 @@ TEXTS = {
         "quiet_hours_deleted": "✅ Quiet-hour window deleted: {window}",
         "quiet_hours_delete_empty": "There are no quiet-hour windows to delete.",
         "schedule_timezone": "Timezone: {timezone}",
+        "schedule_timezone_note": "⚠️ Before setting a schedule, make sure your timezone is set correctly.",
         "btn_schedule_timezone": "🌐 Timezone",
         "timezone_input_instructions": "This is your local time offset relative to UTC.\nFor example, if your local time is 2 hours ahead of UTC, use UTC+2.\nYou can also send +2, -5, or 0.\nThe bot uses this timezone for your schedule.\nSend \"cancel\" to go back.",
         "timezone_invalid": "❌ Invalid timezone. Use UTC+0, UTC+2, UTC-5, +3, -4, or 0.",
@@ -318,6 +319,12 @@ TEXTS = {
             "To begin, open ⚙️ Setup, choose a mode, connect your channel, and configure your prompt, feeds, and schedule.\n"
             "You can manage plans/payment separately anytime."
         ),
+        "start_welcome_named": (
+            "👋 Welcome, {name}!\n\n"
+            "I help you create and schedule posts for your Telegram channel.\n\n"
+            "To begin, open ⚙️ Setup, choose a mode, connect your channel, and configure your prompt, feeds, and schedule.\n"
+            "You can manage plans/payment separately anytime."
+        ),
     },
     "ru": {
         "welcome": "Добро пожаловать!",
@@ -379,8 +386,8 @@ TEXTS = {
         "scheduling_menu_title": "🕒 Расписание:",
         "channel_management_title": "📺 Управление каналом:",
         "modes_menu_title": "🧠 Настройки режимов:",
-        "creative_menu_title": "✨ Настройки Creative\n\n✍️ Задайте промпт (или используйте конструктор).\n🎛 При необходимости настройте Разнообразие контента.\n🕒 Откройте Расписание и выберите: По времени или По интервалу.\n✅ Для режима По времени задайте слоты и включите Расписание.\n🚀 Выполните /autoposton для запуска публикаций (в ближайший слот или по интервалу).\n🧪 Нажмите Превью, чтобы посмотреть итог.",
-        "rss_menu_title": "📰 Настройки RSS + AI\n\n✍️ Задайте промпт.\n🧾 Добавьте ленты-источники.\n🧩 Откройте Формат поста и настройте вывод.\n🕒 Откройте Расписание и выберите: По времени или По интервалу.\n✅ Для режима По времени задайте слоты и включите Расписание.\n🚀 Выполните /autoposton для запуска публикаций (в ближайший слот или по интервалу).\n🧪 Нажмите Превью, чтобы посмотреть итог.",
+        "creative_menu_title": "✨ Настройки Creative\n\n✍️ Задайте промпт (или используйте конструктор).\n🎛 При необходимости настройте Разнообразие контента.\n🕒 Откройте Расписание и выберите: По времени или По интервалу.\n✅ Для режима По времени задайте слоты и включите Расписание.\n🚀 Выполните /autoposton для запуска публикаций (в ближайший слот или по интервалу).\n🧪 Нажмите Превью, чтобы посмотреть итог.\n⚠️ Расписание и тихие часы работают по выбранному часовому поясу.",
+        "rss_menu_title": "📰 Настройки RSS + AI\n\n✍️ Задайте промпт.\n🧾 Добавьте ленты-источники.\n🧩 Откройте Формат поста и настройте вывод.\n🕒 Откройте Расписание и выберите: По времени или По интервалу.\n✅ Для режима По времени задайте слоты и включите Расписание.\n🚀 Выполните /autoposton для запуска публикаций (в ближайший слот или по интервалу).\n🧪 Нажмите Превью, чтобы посмотреть итог.\n⚠️ Расписание и тихие часы работают по выбранному часовому поясу.",
         "schedule_mode_title_rss": "📰 Расписание RSS + AI",
         "schedule_mode_title_creative": "✨ Расписание Creative",
         "schedule_current": "Текущее расписание:\n{schedule}",
@@ -511,6 +518,7 @@ TEXTS = {
         "quiet_hours_deleted": "✅ Окно тихих часов удалено: {window}",
         "quiet_hours_delete_empty": "Нет тихих часов для удаления.",
         "schedule_timezone": "Часовой пояс: {timezone}",
+        "schedule_timezone_note": "⚠️ Важно: перед настройкой расписания убедитесь, что часовой пояс указан правильно.",
         "btn_schedule_timezone": "🌐 Часовой пояс",
         "timezone_input_instructions": "Это смещение вашего местного времени относительно UTC.\nНапример, если у вас время на 2 часа впереди UTC, укажите UTC+2.\nТакже можно просто отправить +2, -5 или 0.\nБот будет использовать этот часовой пояс для расписания.\nОтправьте \"cancel\", чтобы вернуться.",
         "timezone_invalid": "❌ Неверный часовой пояс. Используйте UTC+0, UTC+2, UTC-5, +3, -4 или 0.",
@@ -634,6 +642,12 @@ TEXTS = {
         "channel_selected_now": "📌 Выбран канал: {channel}",
         "start_welcome": (
             "👋 Добро пожаловать в Postora.\n\n"
+            "Я помогаю создавать и публиковать посты по расписанию для вашего Telegram-канала.\n\n"
+            "Чтобы начать, откройте ⚙️ Настройку, выберите режим, подключите канал и задайте промпт, ленты и расписание.\n"
+            "Тариф и оплату можно настроить отдельно в любое время."
+        ),
+        "start_welcome_named": (
+            "👋 Привет, {name}!\n\n"
             "Я помогаю создавать и публиковать посты по расписанию для вашего Telegram-канала.\n\n"
             "Чтобы начать, откройте ⚙️ Настройку, выберите режим, подключите канал и задайте промпт, ленты и расписание.\n"
             "Тариф и оплату можно настроить отдельно в любое время."
