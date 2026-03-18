@@ -37,6 +37,8 @@ from keyboards import (
     build_emoji_management_menu,
     build_feed_management_menu,
     build_feed_delete_menu,
+    build_quiet_hours_menu,
+    build_quiet_hours_delete_menu,
     build_channel_delete_menu,
     build_channel_picker_menu,
     build_scheduling_menu,
@@ -409,6 +411,8 @@ DEFAULT_CLIENT = {
     "rss_quiet_hours_end": "",
     "creative_quiet_hours_start": "",
     "creative_quiet_hours_end": "",
+    "rss_quiet_hours_windows": [],
+    "creative_quiet_hours_windows": [],
     "schedule_enabled": False,
     "schedule_times": [],
     "last_schedule_date": None,
@@ -489,6 +493,8 @@ CHANNEL_SCOPED_KEYS = (
     "rss_quiet_hours_end",
     "creative_quiet_hours_start",
     "creative_quiet_hours_end",
+    "rss_quiet_hours_windows",
+    "creative_quiet_hours_windows",
     "creative_variation_level",
     "creative_post_types",
     "creative_avoid_repetition",
@@ -2065,10 +2071,8 @@ def schedule_summary_for_mode(cfg: dict, mode: str) -> str:
     enabled, times, _, _ = mode_schedule_state(cfg, mode)
     status = "ON" if enabled else "OFF"
     times_text = ", ".join(times) if times else "(empty)"
-    start_key, end_key = _quiet_hours_keys(mode)
-    quiet_start = str(cfg.get(start_key) or "").strip()
-    quiet_end = str(cfg.get(end_key) or "").strip()
-    quiet_text = f"{quiet_start}–{quiet_end}" if quiet_start and quiet_end else "OFF"
+    quiet_windows = quiet_windows_for_mode(cfg, mode)
+    quiet_text = ", ".join([f"{start}–{end}" for start, end in quiet_windows]) if quiet_windows else "OFF"
     next_run = _parse_local_iso_datetime(cfg.get(_interval_next_run_key(mode)) or "")
     next_text = next_run.strftime("%Y-%m-%d %H:%M") if next_run else "not set"
     return f"Status: {status}\nTimes: {times_text}\nQuiet hours: {quiet_text}\nNext interval run: {next_text}"
@@ -2107,6 +2111,57 @@ def _quiet_hours_keys(mode: str) -> tuple[str, str]:
     if mode == "creative":
         return "creative_quiet_hours_start", "creative_quiet_hours_end"
     return "rss_quiet_hours_start", "rss_quiet_hours_end"
+
+
+def _quiet_hours_windows_key(mode: str) -> str:
+    return "creative_quiet_hours_windows" if mode == "creative" else "rss_quiet_hours_windows"
+
+
+def quiet_windows_for_mode(cfg: dict, mode: str) -> list[tuple[str, str]]:
+    windows: list[tuple[str, str]] = []
+    raw_windows = cfg.get(_quiet_hours_windows_key(mode))
+    if isinstance(raw_windows, list):
+        for item in raw_windows:
+            start = ""
+            end = ""
+            if isinstance(item, str):
+                parts = item.split("-", 1)
+                if len(parts) == 2:
+                    start, end = parts[0].strip(), parts[1].strip()
+            elif isinstance(item, dict):
+                start = str(item.get("start") or "").strip()
+                end = str(item.get("end") or "").strip()
+            if _parse_hhmm(start) and _parse_hhmm(end) and start != end:
+                windows.append((start, end))
+    if windows:
+        return windows
+    start_key, end_key = _quiet_hours_keys(mode)
+    start = str(cfg.get(start_key) or "").strip()
+    end = str(cfg.get(end_key) or "").strip()
+    if _parse_hhmm(start) and _parse_hhmm(end) and start != end:
+        return [(start, end)]
+    return []
+
+
+def set_quiet_windows_for_mode(cfg: dict, mode: str, windows: list[tuple[str, str]]) -> None:
+    normalized: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for start, end in windows:
+        if not _parse_hhmm(start) or not _parse_hhmm(end) or start == end:
+            continue
+        token = f"{start}-{end}"
+        if token in seen:
+            continue
+        seen.add(token)
+        normalized.append((start, end))
+    cfg[_quiet_hours_windows_key(mode)] = [f"{start}-{end}" for start, end in normalized]
+    start_key, end_key = _quiet_hours_keys(mode)
+    if normalized:
+        cfg[start_key] = normalized[0][0]
+        cfg[end_key] = normalized[0][1]
+    else:
+        cfg[start_key] = ""
+        cfg[end_key] = ""
 
 
 def user_timezone_offset_hours(cfg: dict) -> int:
@@ -2171,18 +2226,24 @@ def _quiet_window_for_day(start_hm: tuple[int, int], end_hm: tuple[int, int], no
 
 
 def _apply_quiet_hours(cfg: dict, mode: str, candidate: datetime) -> datetime:
-    start_key, end_key = _quiet_hours_keys(mode)
-    start_hm = _parse_hhmm(str(cfg.get(start_key) or ""))
-    end_hm = _parse_hhmm(str(cfg.get(end_key) or ""))
-    if not start_hm or not end_hm:
+    windows = quiet_windows_for_mode(cfg, mode)
+    if not windows:
         return candidate
-    if start_hm == end_hm:
-        return candidate
-
-    start_dt, end_dt = _quiet_window_for_day(start_hm, end_hm, candidate)
-    if start_dt <= candidate < end_dt:
-        return end_dt
-    return candidate
+    adjusted = candidate
+    for _ in range(24):
+        next_allowed = adjusted
+        for start, end in windows:
+            start_hm = _parse_hhmm(start)
+            end_hm = _parse_hhmm(end)
+            if not start_hm or not end_hm or start_hm == end_hm:
+                continue
+            start_dt, end_dt = _quiet_window_for_day(start_hm, end_hm, adjusted)
+            if start_dt <= adjusted < end_dt and end_dt > next_allowed:
+                next_allowed = end_dt
+        if next_allowed == adjusted:
+            return adjusted
+        adjusted = next_allowed
+    return adjusted
 
 
 def _schedule_next_interval_run(cfg: dict, mode: str, from_time: datetime) -> datetime:
@@ -2214,16 +2275,21 @@ def should_run_mode_now(
         if now_slot in times_set:
             due_slot = now_slot
         else:
-            start_key, end_key = _quiet_hours_keys(mode)
-            start_hm = _parse_hhmm(str(cfg.get(start_key) or ""))
-            end_hm = _parse_hhmm(str(cfg.get(end_key) or ""))
-            if start_hm and end_hm and start_hm != end_hm and (now.hour, now.minute) == end_hm:
+            for start, end in quiet_windows_for_mode(cfg, mode):
+                start_hm = _parse_hhmm(start)
+                end_hm = _parse_hhmm(end)
+                if not start_hm or not end_hm or start_hm == end_hm:
+                    continue
+                if (now.hour, now.minute) != end_hm:
+                    continue
                 start_min = start_hm[0] * 60 + start_hm[1]
                 end_min = end_hm[0] * 60 + end_hm[1]
+
                 def in_quiet(slot_min: int) -> bool:
                     if start_min < end_min:
                         return start_min <= slot_min < end_min
                     return slot_min >= start_min or slot_min < end_min
+
                 quiet_slots = []
                 for slot in sorted(times_set):
                     hm = _parse_hhmm(slot)
@@ -2234,6 +2300,7 @@ def should_run_mode_now(
                         quiet_slots.append(slot)
                 if quiet_slots:
                     due_slot = quiet_slots[-1]
+                    break
         if not due_slot:
             return False
         today = str(now.date())
@@ -2426,6 +2493,35 @@ def feed_management_text(cfg: dict, selected_channel: str) -> str:
 
 def build_feeds_delete_menu(cfg: dict) -> InlineKeyboardMarkup:
     return build_feed_delete_menu(ui_pack(cfg), cfg.get("feeds", []))
+
+
+def quiet_hours_overview(cfg: dict, mode: str) -> str:
+    windows = quiet_windows_for_mode(cfg, mode)
+    if not windows:
+        return ui_text(cfg, "quiet_hours_empty")
+    lines = [f"{idx}) {start}-{end}" for idx, (start, end) in enumerate(windows, start=1)]
+    return ui_text(cfg, "quiet_hours_list_title") + "\n" + "\n".join(lines)
+
+
+def quiet_hours_management_text(cfg: dict, mode: str, selected_channel: str) -> str:
+    return (
+        ui_text(cfg, "channel_selected_now").format(channel=selected_channel)
+        + "\n\n"
+        + ui_text(cfg, "quiet_hours_management_title")
+        + "\n"
+        + ui_text(cfg, "schedule_timezone").format(timezone=user_timezone_label(cfg))
+        + "\n\n"
+        + quiet_hours_overview(cfg, mode)
+    )
+
+
+def build_mode_quiet_hours_menu(cfg: dict, mode: str) -> InlineKeyboardMarkup:
+    return build_quiet_hours_menu(ui_pack(cfg), mode)
+
+
+def build_mode_quiet_hours_delete_menu(cfg: dict, mode: str) -> InlineKeyboardMarkup:
+    windows = [f"{start}-{end}" for start, end in quiet_windows_for_mode(cfg, mode)]
+    return build_quiet_hours_delete_menu(ui_pack(cfg), mode, windows)
 
 
 def channels_overview(cfg: dict) -> str:
@@ -2707,6 +2803,9 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             q.data = mapped
         elif action in ("schedule_rss_interval", "schedule_creative_interval"):
             mapped = "ui:schedule:rss:interval" if action == "schedule_rss_interval" else "ui:schedule:creative:interval"
+            q.data = mapped
+        elif action in ("schedule_rss_quiet", "schedule_creative_quiet"):
+            mapped = "ui:schedule:rss:quiet" if action == "schedule_rss_quiet" else "ui:schedule:creative:quiet"
             q.data = mapped
         else:
             await q.message.reply_text(ui_text(cfg, "channel_selected_now").format(channel=selected))
@@ -3231,14 +3330,106 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 reply_markup=build_channel_picker(cfg, action, f"ui:schedule:{mode}:menu"),
             )
             return
+        await q.answer()
+        text = quiet_hours_management_text(cfg, mode, selected)
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_mode_quiet_hours_menu(cfg, mode))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_mode_quiet_hours_menu(cfg, mode))
+        return
+
+    if data in ("ui:schedule:rss:quiet:add", "ui:schedule:creative:quiet:add"):
+        mode = "creative" if data.endswith("creative:quiet:add") else "rss"
+        action = "schedule_creative_quiet" if mode == "creative" else "schedule_rss_quiet"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, action, f"ui:schedule:{mode}:menu"),
+            )
+            return
         context.user_data["awaiting_quiet_mode"] = mode
         await q.answer()
         await q.message.reply_text(
             ui_text(cfg, "channel_selected_now").format(channel=selected)
             + "\n\n"
+            + ui_text(cfg, "schedule_timezone").format(timezone=user_timezone_label(cfg))
+            + "\n\n"
             + ui_text(cfg, "quiet_hours_input_instructions"),
-            reply_markup=build_mode_schedule_submenu(cfg, mode),
+            reply_markup=build_mode_quiet_hours_menu(cfg, mode),
         )
+        return
+
+    if data in ("ui:schedule:rss:quiet:delete", "ui:schedule:creative:quiet:delete"):
+        mode = "creative" if data.endswith("creative:quiet:delete") else "rss"
+        action = "schedule_creative_quiet" if mode == "creative" else "schedule_rss_quiet"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, action, f"ui:schedule:{mode}:menu"),
+            )
+            return
+        windows = quiet_windows_for_mode(cfg, mode)
+        await q.answer()
+        if not windows:
+            await q.message.reply_text(ui_text(cfg, "quiet_hours_delete_empty"), reply_markup=build_mode_quiet_hours_menu(cfg, mode))
+            return
+        text = quiet_hours_management_text(cfg, mode, selected)
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_mode_quiet_hours_delete_menu(cfg, mode))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_mode_quiet_hours_delete_menu(cfg, mode))
+        return
+
+    if data.startswith("ui:schedule:rss:quiet:del:") or data.startswith("ui:schedule:creative:quiet:del:"):
+        mode = "creative" if data.startswith("ui:schedule:creative:quiet:del:") else "rss"
+        action = "schedule_creative_quiet" if mode == "creative" else "schedule_rss_quiet"
+        selected, state = require_channel_context(cfg, context, action)
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, action, f"ui:schedule:{mode}:menu"),
+            )
+            return
+        raw_idx = data.rsplit(":", 1)[-1]
+        try:
+            idx = int(raw_idx) - 1
+        except ValueError:
+            await q.answer()
+            return
+        windows = quiet_windows_for_mode(cfg, mode)
+        if idx < 0 or idx >= len(windows):
+            await q.answer()
+            return
+        removed = windows.pop(idx)
+        set_quiet_windows_for_mode(cfg, mode, windows)
+        save_client(user_id, cfg)
+        await q.answer()
+        text = (
+            ui_text(cfg, "quiet_hours_deleted").format(window=f"{removed[0]}-{removed[1]}")
+            + "\n\n"
+            + quiet_hours_management_text(cfg, mode, selected)
+        )
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_mode_quiet_hours_menu(cfg, mode))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_mode_quiet_hours_menu(cfg, mode))
         return
 
     if data == "ui:schedule:timezone":
@@ -4538,36 +4729,31 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     awaiting_quiet_mode = context.user_data.get("awaiting_quiet_mode")
     if awaiting_quiet_mode:
+        selected = cfg.get("channel") or ""
         if text.lower() == "cancel":
             context.user_data.pop("awaiting_quiet_mode", None)
             await update.message.reply_text(
-                schedule_mode_menu_text(cfg, awaiting_quiet_mode),
-                reply_markup=build_mode_schedule_submenu(cfg, awaiting_quiet_mode),
-            )
-            return
-        if text.lower() == "clear":
-            start_key, end_key = _quiet_hours_keys(awaiting_quiet_mode)
-            cfg[start_key] = ""
-            cfg[end_key] = ""
-            save_client(user_id, cfg)
-            context.user_data.pop("awaiting_quiet_mode", None)
-            await update.message.reply_text(
-                ui_text(cfg, "quiet_hours_cleared") + "\n\n" + schedule_mode_menu_text(cfg, awaiting_quiet_mode),
-                reply_markup=build_mode_schedule_submenu(cfg, awaiting_quiet_mode),
+                quiet_hours_management_text(cfg, awaiting_quiet_mode, selected),
+                reply_markup=build_mode_quiet_hours_menu(cfg, awaiting_quiet_mode),
             )
             return
         quiet_match = re.fullmatch(r"\s*(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})\s*", text)
         if not quiet_match or not _parse_hhmm(quiet_match.group(1)) or not _parse_hhmm(quiet_match.group(2)):
             await update.message.reply_text(ui_text(cfg, "quiet_hours_invalid"))
             return
-        start_key, end_key = _quiet_hours_keys(awaiting_quiet_mode)
-        cfg[start_key] = quiet_match.group(1)
-        cfg[end_key] = quiet_match.group(2)
+        start = quiet_match.group(1)
+        end = quiet_match.group(2)
+        if start == end:
+            await update.message.reply_text(ui_text(cfg, "quiet_hours_invalid"))
+            return
+        windows = quiet_windows_for_mode(cfg, awaiting_quiet_mode)
+        windows.append((start, end))
+        set_quiet_windows_for_mode(cfg, awaiting_quiet_mode, windows)
         save_client(user_id, cfg)
         context.user_data.pop("awaiting_quiet_mode", None)
         await update.message.reply_text(
-            ui_text(cfg, "quiet_hours_saved").format(start=cfg[start_key], end=cfg[end_key]) + "\n\n" + schedule_mode_menu_text(cfg, awaiting_quiet_mode),
-            reply_markup=build_mode_schedule_submenu(cfg, awaiting_quiet_mode),
+            ui_text(cfg, "quiet_hours_saved").format(start=start, end=end) + "\n\n" + quiet_hours_management_text(cfg, awaiting_quiet_mode, selected),
+            reply_markup=build_mode_quiet_hours_menu(cfg, awaiting_quiet_mode),
         )
         return
 
