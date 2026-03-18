@@ -426,6 +426,8 @@ DEFAULT_CLIENT = {
     "creative_schedule_times": [],
     "creative_last_schedule_date": None,
     "creative_last_schedule_time": None,
+    "rss_scheduled_next_allowed_at": None,
+    "creative_scheduled_next_allowed_at": None,
     "timezone_offset_hours": 0,
 
     "daily_limit": 10,
@@ -483,6 +485,8 @@ CHANNEL_SCOPED_KEYS = (
     "creative_schedule_times",
     "creative_last_schedule_date",
     "creative_last_schedule_time",
+    "rss_scheduled_next_allowed_at",
+    "creative_scheduled_next_allowed_at",
     "interval_minutes",
     "rss_use_interval",
     "creative_use_interval",
@@ -2108,6 +2112,10 @@ def _interval_last_run_key(mode: str) -> str:
     return "creative_last_interval_run_at" if mode == "creative" else "rss_last_interval_run_at"
 
 
+def _scheduled_next_allowed_key(mode: str) -> str:
+    return "creative_scheduled_next_allowed_at" if mode == "creative" else "rss_scheduled_next_allowed_at"
+
+
 def _quiet_hours_keys(mode: str) -> tuple[str, str]:
     if mode == "creative":
         return "creative_quiet_hours_start", "creative_quiet_hours_end"
@@ -2269,50 +2277,48 @@ def should_run_mode_now(
     use_schedule = not mode_uses_interval(cfg, mode)
     if use_schedule:
         if not enabled or not times:
+            cfg.pop(_scheduled_next_allowed_key(mode), None)
             return False
+
+        pending_key = _scheduled_next_allowed_key(mode)
+        pending_run = _parse_local_iso_datetime(cfg.get(pending_key) or "")
+        if pending_run:
+            adjusted_pending = _apply_quiet_hours(cfg, mode, pending_run)
+            if adjusted_pending != pending_run:
+                cfg[pending_key] = adjusted_pending.isoformat(timespec="seconds")
+                save_client(user_id, cfg)
+                return False
+            if now < adjusted_pending:
+                return False
+            due_slot = str(cfg.get(f"{mode}_scheduled_due_slot") or "").strip()
+            cfg.pop(pending_key, None)
+            if due_slot:
+                cfg[f"{mode}_scheduled_due_slot"] = due_slot
+            return True
+
         now_slot = now.strftime("%H:%M")
-        due_slot = None
         times_set = set(times)
-        if now_slot in times_set:
-            due_slot = now_slot
-        else:
-            for start, end in quiet_windows_for_mode(cfg, mode):
-                start_hm = _parse_hhmm(start)
-                end_hm = _parse_hhmm(end)
-                if not start_hm or not end_hm or start_hm == end_hm:
-                    continue
-                if (now.hour, now.minute) != end_hm:
-                    continue
-                start_min = start_hm[0] * 60 + start_hm[1]
-                end_min = end_hm[0] * 60 + end_hm[1]
-
-                def in_quiet(slot_min: int) -> bool:
-                    if start_min < end_min:
-                        return start_min <= slot_min < end_min
-                    return slot_min >= start_min or slot_min < end_min
-
-                quiet_slots = []
-                for slot in sorted(times_set):
-                    hm = _parse_hhmm(slot)
-                    if not hm:
-                        continue
-                    slot_min = hm[0] * 60 + hm[1]
-                    if in_quiet(slot_min):
-                        quiet_slots.append(slot)
-                if quiet_slots:
-                    due_slot = quiet_slots[-1]
-                    break
-        if not due_slot:
+        if now_slot not in times_set:
             return False
+
         today = str(now.date())
-        if last_date == today and last_time == due_slot:
+        if last_date == today and last_time == now_slot:
             return False
-        cfg[f"{mode}_scheduled_due_slot"] = due_slot
+
+        candidate = now.replace(second=0, microsecond=0)
+        next_allowed = _apply_quiet_hours(cfg, mode, candidate)
+        cfg[f"{mode}_scheduled_due_slot"] = now_slot
+        if next_allowed > candidate:
+            cfg[pending_key] = next_allowed.isoformat(timespec="seconds")
+            save_client(user_id, cfg)
+            return False
+        cfg.pop(pending_key, None)
         return True
 
     interval_min = int(cfg.get("interval_minutes", 30))
     if interval_min <= 0:
         interval_min = 30
+    cfg.pop(_scheduled_next_allowed_key(mode), None)
 
     next_key = _interval_next_run_key(mode)
     next_run = _parse_local_iso_datetime(cfg.get(next_key) or "")
@@ -2353,6 +2359,7 @@ def mark_mode_scheduled(cfg: dict, mode: str, now: datetime) -> None:
     interval_key = _interval_last_run_key(mode)
     cfg[interval_key] = now.isoformat(timespec="seconds")
     _schedule_next_interval_run(cfg, mode, now)
+    cfg.pop(_scheduled_next_allowed_key(mode), None)
     enabled, times, _, _ = mode_schedule_state(cfg, mode)
     if not (enabled and times):
         return
