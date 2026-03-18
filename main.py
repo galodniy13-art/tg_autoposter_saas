@@ -1403,6 +1403,47 @@ def _compose_rss_image(template_path: Path, rss_image_url: str, watermark_path: 
     return composed_path
 
 
+def _compose_vertical_rss_image_with_optional_watermark(
+    rss_image_url: str,
+    watermark_path: Path | None = None,
+) -> tuple[Path | None, bool, str | None]:
+    try:
+        rss_resp = requests.get(rss_image_url, timeout=20)
+        rss_resp.raise_for_status()
+        rss_img = Image.open(io.BytesIO(rss_resp.content)).convert("RGBA")
+    except Exception:
+        logger.warning("Vertical RSS source image download/open failed: %s", rss_image_url)
+        return None, False, "rss_image_unusable"
+
+    source_ratio = rss_img.width / max(1, rss_img.height)
+    if source_ratio >= 0.75:
+        return None, False, None
+
+    quality_issue = _rss_image_quality_issue(rss_img, rss_image_url)
+    if quality_issue:
+        logger.info("Vertical RSS image rejected (%s): %s", quality_issue, rss_image_url)
+        return None, True, "rss_image_rejected"
+
+    try:
+        if watermark_path and watermark_path.exists() and watermark_path.is_file():
+            wm = Image.open(watermark_path).convert("RGBA")
+            canvas_w, canvas_h = rss_img.size
+            max_w = max(24, int(canvas_w * 0.22))
+            max_h = max(24, int(canvas_h * 0.12))
+            wm.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+            pad = max(8, int(min(canvas_w, canvas_h) * 0.03))
+            pos = (canvas_w - wm.width - pad, canvas_h - wm.height - pad)
+            rss_img.paste(wm, pos, wm)
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+            temp_path = Path(tmp.name)
+        rss_img.convert("RGB").save(temp_path, format="JPEG", quality=92, optimize=True)
+        return temp_path, True, None
+    except Exception:
+        logger.warning("Vertical RSS image processing failed")
+        return None, True, "compose_failed"
+
+
 async def prepare_rss_image_for_sending(bot, cfg: dict, user_id: int, image_url: str | None) -> tuple[str | None, Path | None]:
     if not image_url:
         return None, None
@@ -1411,6 +1452,16 @@ async def prepare_rss_image_for_sending(bot, cfg: dict, user_id: int, image_url:
     if str(cfg.get("mode") or "").strip().lower() not in ("rss", "both"):
         return image_url, None
 
+    watermark_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "watermark")
+    watermark_path = (BASE_DIR / watermark_rel) if watermark_rel else None
+    vertical_path, is_vertical, vertical_error = _compose_vertical_rss_image_with_optional_watermark(image_url, watermark_path)
+    if is_vertical:
+        if not vertical_path:
+            if vertical_error in {"rss_image_unusable", "rss_image_rejected", "compose_failed"}:
+                return None, None
+            return image_url, None
+        return str(vertical_path), vertical_path
+
     template_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "template")
     if not template_rel:
         return image_url, None
@@ -1418,8 +1469,6 @@ async def prepare_rss_image_for_sending(bot, cfg: dict, user_id: int, image_url:
     if not template_path.exists() or not template_path.is_file():
         return image_url, None
 
-    watermark_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "watermark")
-    watermark_path = (BASE_DIR / watermark_rel) if watermark_rel else None
     composed_path, compose_error = _compose_rss_image_with_status(template_path, image_url, watermark_path)
     if not composed_path:
         if compose_error in {"rss_image_unusable", "rss_image_rejected", "compose_failed"}:
@@ -1437,6 +1486,20 @@ async def prepare_rss_preview_image_for_sending(bot, cfg: dict, user_id: int, im
     if str(cfg.get("mode") or "").strip().lower() not in ("rss", "both"):
         return image_url, None, None
 
+    watermark_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "watermark")
+    watermark_path = (BASE_DIR / watermark_rel) if watermark_rel else None
+    if cfg.get("rss_watermark_file_id") and not watermark_rel:
+        logger.info("RSS preview watermark download failed for user %s", user_id)
+        return image_url, None, "preview_status_asset_load_failed_normal"
+
+    vertical_path, is_vertical, vertical_error = _compose_vertical_rss_image_with_optional_watermark(image_url, watermark_path)
+    if is_vertical:
+        if not vertical_path:
+            if vertical_error in {"rss_image_unusable", "rss_image_rejected"}:
+                return None, None, "preview_status_no_rss_image_text_only"
+            return image_url, None, "preview_status_template_build_failed_normal"
+        return str(vertical_path), vertical_path, None
+
     template_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "template")
     if not template_rel:
         if cfg.get("rss_template_file_id"):
@@ -1447,12 +1510,6 @@ async def prepare_rss_preview_image_for_sending(bot, cfg: dict, user_id: int, im
     template_path = BASE_DIR / template_rel
     if not template_path.exists() or not template_path.is_file():
         logger.info("RSS preview template file missing for user %s: %s", user_id, template_path)
-        return image_url, None, "preview_status_asset_load_failed_normal"
-
-    watermark_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "watermark")
-    watermark_path = (BASE_DIR / watermark_rel) if watermark_rel else None
-    if cfg.get("rss_watermark_file_id") and not watermark_rel:
-        logger.info("RSS preview watermark download failed for user %s", user_id)
         return image_url, None, "preview_status_asset_load_failed_normal"
 
     composed_path, compose_error = _compose_rss_image_with_status(template_path, image_url, watermark_path)
@@ -2393,6 +2450,8 @@ def schedule_mode_menu_text(cfg: dict, mode: str) -> str:
         + ui_text(cfg, "schedule_interval_current").format(interval=interval_min)
         + "\n"
         + ui_text(cfg, "schedule_timezone").format(timezone=user_timezone_label(cfg))
+        + "\n"
+        + ui_text(cfg, "schedule_timezone_note")
         + "\n\n"
         + ui_text(cfg, "schedule_current").format(schedule=schedule_summary_for_mode(cfg, mode))
     )
@@ -2556,12 +2615,12 @@ def channel_display_name(cfg: dict, channel: str) -> str:
     if isinstance(meta, dict):
         item = meta.get(channel)
         if isinstance(item, dict):
-            username = (item.get("username") or "").strip()
-            if username:
-                return username if username.startswith("@") else f"@{username}"
             title = (item.get("title") or "").strip()
             if title:
                 return title
+            username = (item.get("username") or "").strip()
+            if username:
+                return username if username.startswith("@") else f"@{username}"
 
     labels = cfg.get("channel_labels")
     if isinstance(labels, dict):
@@ -2685,7 +2744,12 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lang = (cfg.get("language") or "en").lower()
     if lang not in UI_TEXTS:
         lang = "en"
-    await send_menu(update, cfg, UI_TEXTS[lang]["start_welcome"])
+    first_name = (getattr(update.effective_user, "first_name", None) or "").strip()
+    welcome_key = "start_welcome_named" if first_name else "start_welcome"
+    welcome_text = UI_TEXTS[lang].get(welcome_key, UI_TEXTS[lang]["start_welcome"])
+    if first_name and "{name}" in welcome_text:
+        welcome_text = welcome_text.format(name=first_name)
+    await send_menu(update, cfg, welcome_text)
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
