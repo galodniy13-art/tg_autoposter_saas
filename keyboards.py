@@ -258,6 +258,24 @@ def build_mode_schedule_menu(labels: dict, mode: str, enabled: bool, use_interva
     )
 
 
+def build_quiet_hours_menu(labels: dict, mode: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(labels["btn_quiet_hours_add"], callback_data=f"ui:schedule:{mode}:quiet:add")],
+            [InlineKeyboardButton(labels["btn_quiet_hours_delete"], callback_data=f"ui:schedule:{mode}:quiet:delete")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data=f"ui:schedule:{mode}:menu")],
+        ]
+    )
+
+
+def build_quiet_hours_delete_menu(labels: dict, mode: str, windows: list[str]) -> InlineKeyboardMarkup:
+    rows = []
+    for idx, window in enumerate(windows, start=1):
+        rows.append([InlineKeyboardButton(f"❌ {idx}. {window}", callback_data=f"ui:schedule:{mode}:quiet:del:{idx}")])
+    rows.append([InlineKeyboardButton(labels["btn_back"], callback_data=f"ui:schedule:{mode}:quiet")])
+    return InlineKeyboardMarkup(rows)
+
+
 def build_feed_management_menu(labels: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
