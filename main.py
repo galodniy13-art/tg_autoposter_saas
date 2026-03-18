@@ -372,6 +372,7 @@ DEFAULT_CLIENT = {
     "channel": None,
     "channels": [],
     "channel_labels": {},
+    "channel_meta": {},
     "channel_slots": 0,
     "feeds": [],
     "posted_urls": [],
@@ -1970,25 +1971,25 @@ def emoji_management_text(cfg: dict, mode: str) -> str:
     )
 
 
-def _extract_channel_from_forward(msg) -> tuple[str | None, str | None]:
+def _extract_channel_from_forward(msg) -> tuple[str | None, dict]:
     origin = getattr(msg, "forward_origin", None)
     if origin and getattr(origin, "type", "") == "channel":
         chat = getattr(origin, "chat", None)
         if chat and getattr(chat, "id", None):
-            username = getattr(chat, "username", None)
-            channel_key = f"@{username}" if username else str(chat.id)
-            title = getattr(chat, "title", None)
-            label = f"{title} (@{username})" if title and username else (title or channel_key)
-            return channel_key, label
+            username_raw = (getattr(chat, "username", None) or "").strip().lstrip("@")
+            username = f"@{username_raw}" if username_raw else ""
+            channel_key = username or str(chat.id)
+            title = (getattr(chat, "title", None) or "").strip()
+            return channel_key, {"username": username, "title": title}
 
     sender_chat = getattr(msg, "sender_chat", None)
     if sender_chat and getattr(sender_chat, "id", None):
-        username = getattr(sender_chat, "username", None)
-        channel_key = f"@{username}" if username else str(sender_chat.id)
-        title = getattr(sender_chat, "title", None)
-        label = f"{title} (@{username})" if title and username else (title or channel_key)
-        return channel_key, label
-    return None, None
+        username_raw = (getattr(sender_chat, "username", None) or "").strip().lstrip("@")
+        username = f"@{username_raw}" if username_raw else ""
+        channel_key = username or str(sender_chat.id)
+        title = (getattr(sender_chat, "title", None) or "").strip()
+        return channel_key, {"username": username, "title": title}
+    return None, {}
 
 
 def _looks_like_link(value: str) -> bool:
@@ -2481,7 +2482,7 @@ def feeds_overview(cfg: dict) -> str:
 
 def feed_management_text(cfg: dict, selected_channel: str) -> str:
     return (
-        ui_text(cfg, "channel_selected_now").format(channel=selected_channel)
+        selected_channel_text(cfg, selected_channel)
         + "\n\n"
         + ui_text(cfg, "feed_management_title")
         + "\n"
@@ -2505,7 +2506,7 @@ def quiet_hours_overview(cfg: dict, mode: str) -> str:
 
 def quiet_hours_management_text(cfg: dict, mode: str, selected_channel: str) -> str:
     return (
-        ui_text(cfg, "channel_selected_now").format(channel=selected_channel)
+        selected_channel_text(cfg, selected_channel)
         + "\n\n"
         + ui_text(cfg, "quiet_hours_management_title")
         + "\n"
@@ -2535,7 +2536,8 @@ def channels_overview(cfg: dict) -> str:
 
 
 def build_channel_delete_selection_menu(cfg: dict) -> InlineKeyboardMarkup:
-    return build_channel_delete_menu(ui_pack(cfg), get_saved_channels(cfg))
+    channels = get_saved_channels(cfg)
+    return build_channel_delete_menu(ui_pack(cfg), [channel_display_name(cfg, ch) for ch in channels])
 
 
 def get_saved_channels(cfg: dict) -> list[str]:
@@ -2543,12 +2545,27 @@ def get_saved_channels(cfg: dict) -> list[str]:
 
 
 def channel_display_name(cfg: dict, channel: str) -> str:
+    meta = cfg.get("channel_meta")
+    if isinstance(meta, dict):
+        item = meta.get(channel)
+        if isinstance(item, dict):
+            username = (item.get("username") or "").strip()
+            if username:
+                return username if username.startswith("@") else f"@{username}"
+            title = (item.get("title") or "").strip()
+            if title:
+                return title
+
     labels = cfg.get("channel_labels")
     if isinstance(labels, dict):
         label = (labels.get(channel) or "").strip()
         if label:
             return label
     return channel
+
+
+def selected_channel_text(cfg: dict, channel: str) -> str:
+    return ui_text(cfg, "channel_selected_now").format(channel=channel_display_name(cfg, channel))
 
 
 def clear_mode_channel_selection(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2628,7 +2645,8 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
 
 
 def build_channel_picker(cfg: dict, action: str, back_callback: str) -> InlineKeyboardMarkup:
-    return build_channel_picker_menu(ui_pack(cfg), get_saved_channels(cfg), action, back_callback)
+    channels = get_saved_channels(cfg)
+    return build_channel_picker_menu(ui_pack(cfg), [channel_display_name(cfg, ch) for ch in channels], action, back_callback)
 
 
 # ===================== Commands =====================
@@ -2667,7 +2685,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     cfg = ensure_daily_counter(load_client(user_id))
     sub = cfg.get("subscription_until") or ui_text(cfg, "status_inactive")
     channels = get_saved_channels(cfg)
-    channels_text = "\n".join([f"• {ch}" for ch in channels]) if channels else ui_text(cfg, "status_not_set")
+    channels_text = "\n".join([f"• {channel_display_name(cfg, ch)}" for ch in channels]) if channels else ui_text(cfg, "status_not_set")
     rss_daily = int(cfg.get("rss_daily_limit", 0) or 0)
     creative_daily = int(cfg.get("creative_daily_limit", 0) or 0)
 
@@ -2762,11 +2780,11 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await q.answer()
 
         if action == "creative_menu":
-            text = ui_text(cfg, "creative_menu_title") + "\n\n" + ui_text(cfg, "channel_selected_now").format(channel=selected)
+            text = ui_text(cfg, "creative_menu_title") + "\n\n" + selected_channel_text(cfg, selected)
             await q.message.reply_text(text, reply_markup=build_creative_submenu(cfg))
             return
         if action == "rss_menu":
-            text = ui_text(cfg, "rss_menu_title") + "\n\n" + ui_text(cfg, "channel_selected_now").format(channel=selected)
+            text = ui_text(cfg, "rss_menu_title") + "\n\n" + selected_channel_text(cfg, selected)
             await q.message.reply_text(text, reply_markup=build_rss_submenu(cfg))
             return
         if action in ("creative_editprompt", "rss_editprompt"):
@@ -2808,7 +2826,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             mapped = "ui:schedule:rss:quiet" if action == "schedule_rss_quiet" else "ui:schedule:creative:quiet"
             q.data = mapped
         else:
-            await q.message.reply_text(ui_text(cfg, "channel_selected_now").format(channel=selected))
+            await q.message.reply_text(selected_channel_text(cfg, selected))
             return
         data = q.data or ""
 
@@ -2864,7 +2882,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
         await q.answer()
-        text = ui_text(cfg, "creative_menu_title") + "\n\n" + ui_text(cfg, "channel_selected_now").format(channel=selected)
+        text = ui_text(cfg, "creative_menu_title") + "\n\n" + selected_channel_text(cfg, selected)
         try:
             await q.edit_message_text(text=text, reply_markup=build_creative_submenu(cfg))
         except BadRequest:
@@ -2890,7 +2908,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         text = (
             ui_text(cfg, "creative_variety_title")
             + "\n\n"
-            + ui_text(cfg, "channel_selected_now").format(channel=selected)
+            + selected_channel_text(cfg, selected)
             + "\n\n"
             + ui_text(cfg, "creative_variety_summary").format(
                 level=ui_text(cfg, "variation_level_value_" + creative_variation_level(cfg)),
@@ -3008,7 +3026,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 return
 
             try:
-                preview_prefix = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + "🧪 Preview:\n\n"
+                preview_prefix = selected_channel_text(cfg, selected) + "\n\n" + "🧪 Preview:\n\n"
                 creator_entities = apply_bold_title(msg, []) if bool(cfg.get("creative_bold_title", False)) else []
                 await q.message.reply_text(
                     preview_prefix + msg,
@@ -3046,7 +3064,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
         await q.answer()
-        text = ui_text(cfg, "rss_menu_title") + "\n\n" + ui_text(cfg, "channel_selected_now").format(channel=selected)
+        text = ui_text(cfg, "rss_menu_title") + "\n\n" + selected_channel_text(cfg, selected)
         try:
             await q.edit_message_text(text=text, reply_markup=build_rss_submenu(cfg))
         except BadRequest:
@@ -3138,7 +3156,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 )
                 return
 
-            await q.message.reply_text(ui_text(cfg, "channel_selected_now").format(channel=selected))
+            await q.message.reply_text(selected_channel_text(cfg, selected))
             if preview_notice_key:
                 await q.message.reply_text(ui_text(cfg, preview_notice_key))
             if send_image_url:
@@ -3194,7 +3212,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
         await q.answer()
-        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + schedule_mode_menu_text(cfg, mode)
+        text = selected_channel_text(cfg, selected) + "\n\n" + schedule_mode_menu_text(cfg, mode)
         try:
             await q.edit_message_text(text=text, reply_markup=build_mode_schedule_submenu(cfg, mode))
         except BadRequest:
@@ -3219,7 +3237,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data["awaiting_schedule_mode"] = mode
         await q.answer()
         await q.message.reply_text(
-            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            selected_channel_text(cfg, selected)
             + "\n\n"
             + ui_text(cfg, "schedule_input_instructions")
             + "\n\n"
@@ -3252,7 +3270,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             notice = ui_text(cfg, "schedule_enabled") if not enabled else ui_text(cfg, "schedule_disabled")
         save_client(user_id, cfg)
         await q.answer()
-        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + notice + "\n\n" + schedule_mode_menu_text(cfg, mode)
+        text = selected_channel_text(cfg, selected) + "\n\n" + notice + "\n\n" + schedule_mode_menu_text(cfg, mode)
         try:
             await q.edit_message_text(text=text, reply_markup=build_mode_schedule_submenu(cfg, mode))
         except BadRequest:
@@ -3283,7 +3301,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         save_client(user_id, cfg)
         notice = ui_text(cfg, "posting_mode_interval_set") if cfg[key] else ui_text(cfg, "posting_mode_scheduled_set")
         await q.answer()
-        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + notice + "\n\n" + schedule_mode_menu_text(cfg, mode)
+        text = selected_channel_text(cfg, selected) + "\n\n" + notice + "\n\n" + schedule_mode_menu_text(cfg, mode)
         try:
             await q.edit_message_text(text=text, reply_markup=build_mode_schedule_submenu(cfg, mode))
         except BadRequest:
@@ -3308,7 +3326,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data["awaiting_interval_mode"] = mode
         await q.answer()
         await q.message.reply_text(
-            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            selected_channel_text(cfg, selected)
             + "\n\n"
             + ui_text(cfg, "interval_input_instructions"),
             reply_markup=build_mode_schedule_submenu(cfg, mode),
@@ -3356,7 +3374,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data["awaiting_quiet_mode"] = mode
         await q.answer()
         await q.message.reply_text(
-            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            selected_channel_text(cfg, selected)
             + "\n\n"
             + ui_text(cfg, "schedule_timezone").format(timezone=user_timezone_label(cfg))
             + "\n\n"
@@ -3453,7 +3471,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 reply_markup=build_channel_picker(cfg, "rss_output", "ui:mode:rss:menu"),
             )
             return
-        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + output_settings_text(cfg, "rss")
+        text = selected_channel_text(cfg, selected) + "\n\n" + output_settings_text(cfg, "rss")
         await q.answer()
         try:
             await q.edit_message_text(text=text, reply_markup=build_rss_output_submenu(cfg))
@@ -3529,7 +3547,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.message.reply_text(ui_text(cfg, "channel_picker_title"), reply_markup=build_channel_picker(cfg, action, f"ui:mode:{mode}:menu"))
             return
         await q.answer()
-        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + emoji_management_text(cfg, mode)
+        text = selected_channel_text(cfg, selected) + "\n\n" + emoji_management_text(cfg, mode)
         try:
             await q.edit_message_text(text=text, reply_markup=build_emoji_management_submenu(cfg, mode))
         except BadRequest:
@@ -3592,7 +3610,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 reply_markup=build_channel_picker(cfg, "creative_output", "ui:mode:creative:menu"),
             )
             return
-        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + output_settings_text(cfg, "creative")
+        text = selected_channel_text(cfg, selected) + "\n\n" + output_settings_text(cfg, "creative")
         await q.answer()
         try:
             await q.edit_message_text(text=text, reply_markup=build_creative_output_submenu(cfg))
@@ -3622,7 +3640,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
         await q.answer()
-        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + asset_management_text(cfg, mode, asset_type)
+        text = selected_channel_text(cfg, selected) + "\n\n" + asset_management_text(cfg, mode, asset_type)
         submenu = build_asset_management_submenu(cfg, mode, asset_type)
         try:
             await q.edit_message_text(text=text, reply_markup=submenu)
@@ -3669,7 +3687,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data["awaiting_asset_upload"] = {"mode": mode, "asset": asset_type, "channel": selected}
         await q.answer()
         await q.message.reply_text(
-            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            selected_channel_text(cfg, selected)
             + "\n\n"
             + (ui_text(cfg, "asset_prompt_send_watermark") if asset_type == "watermark" else ui_text(cfg, "asset_prompt_send_template"))
         )
@@ -3704,7 +3722,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         save_client(user_id, cfg)
         await q.answer()
         notice = ui_text(cfg, "asset_deleted_watermark") if asset_type == "watermark" else ui_text(cfg, "asset_deleted_template")
-        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + notice + "\n\n" + asset_management_text(cfg, mode, asset_type)
+        text = selected_channel_text(cfg, selected) + "\n\n" + notice + "\n\n" + asset_management_text(cfg, mode, asset_type)
         submenu = build_asset_management_submenu(cfg, mode, asset_type)
         try:
             await q.edit_message_text(text=text, reply_markup=submenu)
@@ -3736,7 +3754,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data["awaiting_asset_upload"] = {"mode": mode, "asset": asset_type, "channel": selected}
         await q.answer()
         await q.message.reply_text(
-            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            selected_channel_text(cfg, selected)
             + "\n\n"
             + (ui_text(cfg, "asset_prompt_send_watermark") if asset_type == "watermark" else ui_text(cfg, "asset_prompt_send_template"))
         )
@@ -3771,7 +3789,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         save_client(user_id, cfg)
         await q.answer()
         notice = ui_text(cfg, "asset_deleted_watermark") if asset_type == "watermark" else ui_text(cfg, "asset_deleted_template")
-        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + notice + "\n\n" + output_settings_text(cfg, mode)
+        text = selected_channel_text(cfg, selected) + "\n\n" + notice + "\n\n" + output_settings_text(cfg, mode)
         submenu = build_creative_output_submenu(cfg) if mode == "creative" else build_rss_output_submenu(cfg)
         try:
             await q.edit_message_text(text=text, reply_markup=submenu)
@@ -3814,7 +3832,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
         feeds = cfg.get("feeds", [])
-        text = ui_text(cfg, "channel_selected_now").format(channel=selected) + "\n\n" + feeds_overview(cfg)
+        text = selected_channel_text(cfg, selected) + "\n\n" + feeds_overview(cfg)
         await q.answer()
         if not feeds:
             try:
@@ -3848,7 +3866,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await q.answer()
         questions = prompt_builder_questions(cfg, "creative")
         await q.message.reply_text(
-            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            selected_channel_text(cfg, selected)
             + "\n\n"
             + ui_text(cfg, "prompt_builder_intro_creative")
             + "\n\n"
@@ -3876,7 +3894,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await q.answer()
         questions = prompt_builder_questions(cfg, "rss")
         await q.message.reply_text(
-            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            selected_channel_text(cfg, selected)
             + "\n\n"
             + ui_text(cfg, "prompt_builder_intro_rss")
             + "\n\n"
@@ -3976,7 +3994,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             context.user_data["awaiting_prompt_channel"] = selected_channel
             await q.answer()
             await q.message.reply_text(
-                ui_text(cfg, "channel_selected_now").format(channel=selected_channel)
+                selected_channel_text(cfg, selected_channel)
                 + "\n\n"
                 + ui_text(cfg, "copy_style_edit_ready").format(prompt=generated[:1500])
                 + "\n\n"
@@ -4005,7 +4023,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data["copy_style"] = {"mode": "creative", "selected_channel": selected, "examples": []}
         await q.answer()
         await q.message.reply_text(
-            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            selected_channel_text(cfg, selected)
             + "\n\n"
             + ui_text(cfg, "copy_style_intro")
         )
@@ -4030,7 +4048,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data["copy_style"] = {"mode": "rss", "selected_channel": selected, "examples": []}
         await q.answer()
         await q.message.reply_text(
-            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            selected_channel_text(cfg, selected)
             + "\n\n"
             + ui_text(cfg, "copy_style_intro")
         )
@@ -4058,7 +4076,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data["awaiting_prompt_channel"] = selected
         await q.answer()
         await q.message.reply_text(
-            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            selected_channel_text(cfg, selected)
             + "\n\n"
             + current_text
             + "\n\n"
@@ -4090,7 +4108,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data["awaiting_prompt_channel"] = selected
         await q.answer()
         await q.message.reply_text(
-            ui_text(cfg, "channel_selected_now").format(channel=selected)
+            selected_channel_text(cfg, selected)
             + "\n\n"
             + current_text
             + "\n\n"
@@ -4153,12 +4171,17 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
 
         removed = channels[idx]
+        removed_label = channel_display_name(cfg, removed)
         channels.pop(idx)
         cfg["channels"] = channels
         labels = cfg.get("channel_labels")
         if isinstance(labels, dict):
             labels.pop(removed, None)
             cfg["channel_labels"] = labels
+        meta = cfg.get("channel_meta")
+        if isinstance(meta, dict):
+            meta.pop(removed, None)
+            cfg["channel_meta"] = meta
         active_idx = context.user_data.get("active_channel_idx")
         if not channels:
             context.user_data.pop("active_channel_idx", None)
@@ -4174,7 +4197,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             switch_active_channel(cfg, channels[new_idx])
         save_client(user_id, cfg)
         text = (
-            ui_text(cfg, "channel_deleted_named").format(channel=removed)
+            ui_text(cfg, "channel_deleted_named").format(channel=removed_label)
             + "\n\n"
             + ui_text(cfg, "channel_management_title")
             + "\n\n"
@@ -4330,6 +4353,7 @@ async def unsetchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     cfg["channels"] = []
     cfg["channel_settings"] = {}
     cfg["channel_labels"] = {}
+    cfg["channel_meta"] = {}
     save_client(user_id, cfg)
     context.user_data.pop("active_channel_idx", None)
     await send_menu(update, cfg, "✅ Channel cleared.")
@@ -4484,13 +4508,13 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data.pop("awaiting_asset_upload", None)
 
         notice = ui_text(cfg, "asset_saved_watermark") if asset_type == "watermark" else ui_text(cfg, "asset_saved_template")
-        menu_text = ui_text(cfg, "channel_selected_now").format(channel=cfg.get("channel") or selected_channel) + "\n\n" + notice + "\n\n" + output_settings_text(cfg, mode)
+        menu_text = selected_channel_text(cfg, cfg.get("channel") or selected_channel) + "\n\n" + notice + "\n\n" + output_settings_text(cfg, mode)
         submenu = build_creative_output_submenu(cfg) if mode == "creative" else build_rss_output_submenu(cfg)
         await update.message.reply_text(menu_text, reply_markup=submenu)
         return
 
     if context.user_data.get("awaiting_channel_forward"):
-        channel, label = _extract_channel_from_forward(update.message)
+        channel, channel_meta = _extract_channel_from_forward(update.message)
         if not channel:
             await update.message.reply_text(ui_text(cfg, "channel_forward_invalid"))
             return
@@ -4517,9 +4541,23 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             existing_idx = len(channels) - 1
         cfg["channels"] = channels
         labels = cfg.get("channel_labels") if isinstance(cfg.get("channel_labels"), dict) else {}
-        if label:
-            labels[channel] = label
+        title = (channel_meta.get("title") or "").strip() if isinstance(channel_meta, dict) else ""
+        username = (channel_meta.get("username") or "").strip() if isinstance(channel_meta, dict) else ""
+        if title:
+            labels[channel] = title
+        elif username:
+            labels[channel] = username if username.startswith("@") else f"@{username}"
         cfg["channel_labels"] = labels
+        meta = cfg.get("channel_meta") if isinstance(cfg.get("channel_meta"), dict) else {}
+        existing_meta = meta.get(channel) if isinstance(meta, dict) else {}
+        if not isinstance(existing_meta, dict):
+            existing_meta = {}
+        merged_meta = {
+            "username": username or (existing_meta.get("username") or ""),
+            "title": title or (existing_meta.get("title") or ""),
+        }
+        meta[channel] = merged_meta
+        cfg["channel_meta"] = meta
         switch_active_channel(cfg, channel)
         save_client(user_id, cfg)
         context.user_data["active_channel_idx"] = existing_idx
