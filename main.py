@@ -33,6 +33,8 @@ from keyboards import (
     build_rss_ai_menu,
     build_rss_output_menu,
     build_creative_output_menu,
+    build_creative_content_plan_menu,
+    build_creative_content_plan_item_picker_menu,
     build_asset_management_menu,
     build_emoji_management_menu,
     build_feed_management_menu,
@@ -439,6 +441,7 @@ DEFAULT_CLIENT = {
     "creative_post_types": list(CREATIVE_POST_TYPES),
     "creative_avoid_repetition": True,
     "creative_last_post_type_idx": -1,
+    "creative_content_plan": [],
 
     "max_dedupe": 1500,
     "fetch_entries_per_feed": 15,
@@ -504,6 +507,7 @@ CHANNEL_SCOPED_KEYS = (
     "creative_post_types",
     "creative_avoid_repetition",
     "creative_last_post_type_idx",
+    "creative_content_plan",
 )
 
 # ===================== Storage helpers =====================
@@ -1856,6 +1860,91 @@ def creative_next_post_type(cfg: dict) -> str:
     return selected[next_idx]
 
 
+def creative_content_plan(cfg: dict) -> list[dict]:
+    raw = cfg.get("creative_content_plan")
+    if not isinstance(raw, list):
+        return []
+    normalized: list[dict] = []
+    for idx, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            continue
+        normalized.append(
+            {
+                "id": int(item.get("id") or idx),
+                "day_label": str(item.get("day_label") or f"Day {idx}"),
+                "topic": str(item.get("topic") or "").strip(),
+                "angle": str(item.get("angle") or "").strip(),
+                "post_type": str(item.get("post_type") or "").strip() or "opinion",
+                "goal": str(item.get("goal") or "").strip() or "engagement",
+                "status": str(item.get("status") or "planned").strip().lower() or "planned",
+            }
+        )
+    return normalized
+
+
+def llm_generate_content_plan(
+    user_id: int,
+    cfg: dict,
+    *,
+    days: int = 7,
+    regenerate_item: dict | None = None,
+) -> list[dict]:
+    style_prompt = get_mode_prompt(user_id, cfg, "creative")
+    profile = (cfg.get("creator_profile") or "").strip()
+    variation = creative_variation_level(cfg)
+    post_types = ", ".join(creative_post_types(cfg))
+    avoid_repetition = bool(cfg.get("creative_avoid_repetition", True))
+    channel_name = str(cfg.get("channel") or "").strip()
+    base_instruction = (
+        "Create a practical Telegram creator content plan.\n"
+        f"Days count: {days}.\n"
+        f"Channel: {channel_name or 'N/A'}.\n"
+        f"Creator profile/context: {profile or 'No profile provided.'}\n"
+        f"Variation level: {variation}.\n"
+        f"Allowed post types: {post_types}.\n"
+        f"Avoid repetition: {'yes' if avoid_repetition else 'no'}.\n"
+        "Return ONLY valid JSON array. No markdown.\n"
+        "Each item object keys: id, day_label, topic, angle, post_type, goal, status.\n"
+        "Set status to planned.\n"
+    )
+    if regenerate_item:
+        base_instruction += (
+            "Generate exactly one replacement item and keep it fresh compared with this existing item:\n"
+            + json.dumps(regenerate_item, ensure_ascii=False)
+            + "\nReturn JSON array with one item."
+        )
+
+    if LLM_PROVIDER == "openai_compat":
+        url = OPENAI_BASE_URL.rstrip("/") + "/chat/completions"
+        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+        payload = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": style_prompt},
+                {"role": "user", "content": base_instruction},
+            ],
+            "temperature": 0.85,
+        }
+        r = requests.post(url, headers=headers, json=payload, timeout=60)
+        r.raise_for_status()
+        txt = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "")
+    else:
+        payload = {"model": OLLAMA_MODEL, "prompt": style_prompt + "\n\n" + base_instruction, "stream": False}
+        r = requests.post(OLLAMA_URL, json=payload, timeout=60)
+        r.raise_for_status()
+        txt = r.json().get("response", "")
+
+    cleaned = txt.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        cleaned = cleaned.replace("json", "", 1).strip()
+    parsed = json.loads(cleaned)
+    if not isinstance(parsed, list):
+        raise ValueError("Content plan response is not a list")
+    normalized = creative_content_plan({"creative_content_plan": parsed})
+    return normalized[:days] if not regenerate_item else normalized[:1]
+
+
 def creator_make_post(user_id: int, cfg: dict) -> str:
     style_prompt = get_mode_prompt(user_id, cfg, "creative")
     profile = (cfg.get("creator_profile") or "").strip()
@@ -1985,6 +2074,50 @@ def build_rss_output_submenu(cfg: dict) -> InlineKeyboardMarkup:
 
 def build_creative_output_submenu(cfg: dict) -> InlineKeyboardMarkup:
     return build_creative_output_menu(ui_pack(cfg), bool(cfg.get("creative_bold_title", False)))
+
+
+def build_creative_content_plan_submenu(cfg: dict) -> InlineKeyboardMarkup:
+    return build_creative_content_plan_menu(ui_pack(cfg))
+
+
+def build_creative_content_plan_item_picker(cfg: dict, action: str) -> InlineKeyboardMarkup:
+    return build_creative_content_plan_item_picker_menu(ui_pack(cfg), creative_content_plan(cfg), action)
+
+
+def creative_content_plan_menu_text(cfg: dict, selected_channel: str) -> str:
+    return (
+        ui_text(cfg, "content_plan_title")
+        + "\n\n"
+        + selected_channel_text(cfg, selected_channel)
+        + "\n\n"
+        + ui_text(cfg, "content_plan_intro")
+    )
+
+
+def creative_content_plan_view_text(cfg: dict, selected_channel: str) -> str:
+    items = creative_content_plan(cfg)
+    if not items:
+        return (
+            ui_text(cfg, "content_plan_title")
+            + "\n\n"
+            + selected_channel_text(cfg, selected_channel)
+            + "\n\n"
+            + ui_text(cfg, "content_plan_empty")
+        )
+    lines = [ui_text(cfg, "content_plan_current_title"), selected_channel_text(cfg, selected_channel), ""]
+    for idx, item in enumerate(items, start=1):
+        lines.append(
+            ui_text(cfg, "content_plan_item_line").format(
+                idx=idx,
+                day_label=item.get("day_label") or f"Day {idx}",
+                topic=item.get("topic") or "—",
+                angle=item.get("angle") or "—",
+                post_type=item.get("post_type") or "—",
+                goal=item.get("goal") or "—",
+                status=item.get("status") or "planned",
+            )
+        )
+    return "\n\n".join(lines)
 
 
 def build_emoji_management_submenu(cfg: dict, mode: str) -> InlineKeyboardMarkup:
@@ -2672,6 +2805,9 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
         "creative_buildprompt",
         "creative_copystyle",
         "creative_variety",
+        "creative_content_plan",
+        "creative_content_plan_regenerate",
+        "creative_content_plan_edit",
         "creative_preview",
         "rss_menu",
         "rss_editprompt",
@@ -2691,6 +2827,7 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
         "schedule_creative_switch",
         "schedule_rss_interval",
         "schedule_creative_interval",
+        "schedule_creative_quiet",
     }
 
     if action in explicit_selection_actions:
@@ -2869,6 +3006,12 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             q.data = mapped
         elif action == "creative_variety":
             q.data = "ui:creative:variety"
+        elif action == "creative_content_plan":
+            q.data = "ui:creative:contentplan"
+        elif action == "creative_content_plan_regenerate":
+            q.data = "ui:creative:contentplan:regenerate"
+        elif action == "creative_content_plan_edit":
+            q.data = "ui:creative:contentplan:edit"
         elif action in ("creative_preview", "rss_preview"):
             mapped = "ui:creative:preview" if action == "creative_preview" else "ui:rss:preview"
             q.data = mapped
@@ -2958,6 +3101,168 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.edit_message_text(text=text, reply_markup=build_creative_submenu(cfg))
         except BadRequest:
             await q.message.reply_text(text=text, reply_markup=build_creative_submenu(cfg))
+        return
+
+    if data == "ui:creative:contentplan":
+        if not await enforce_mode_paywall(update, cfg, "creator"):
+            return
+        selected, state = require_channel_context(cfg, context, "creative_content_plan")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_content_plan", "ui:mode:creative:menu"),
+            )
+            return
+        await q.answer()
+        text = creative_content_plan_menu_text(cfg, selected)
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_creative_content_plan_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_creative_content_plan_submenu(cfg))
+        return
+
+    if data == "ui:creative:contentplan:generate":
+        selected, state = require_channel_context(cfg, context, "creative_content_plan")
+        if state in {"empty", "pick"}:
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "content_plan_no_plan"))
+            return
+        await q.answer()
+        await q.message.reply_text(ui_text(cfg, "content_plan_generating"))
+        try:
+            plan = llm_generate_content_plan(user_id, cfg, days=7)
+            cfg["creative_content_plan"] = plan
+            save_client(user_id, cfg)
+            await q.message.reply_text(
+                ui_text(cfg, "content_plan_generated"),
+                reply_markup=build_creative_content_plan_submenu(cfg),
+            )
+            await q.message.reply_text(
+                creative_content_plan_view_text(cfg, selected),
+                reply_markup=build_creative_content_plan_submenu(cfg),
+            )
+        except Exception:
+            logger.exception("Content plan generate failed for user %s", user_id)
+            await q.message.reply_text(
+                ui_text(cfg, "prompt_builder_error"),
+                reply_markup=build_creative_content_plan_submenu(cfg),
+            )
+        return
+
+    if data == "ui:creative:contentplan:view":
+        selected, state = require_channel_context(cfg, context, "creative_content_plan")
+        if state in {"empty", "pick"}:
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "content_plan_no_plan"))
+            return
+        await q.answer()
+        await q.message.reply_text(
+            creative_content_plan_view_text(cfg, selected),
+            reply_markup=build_creative_content_plan_submenu(cfg),
+        )
+        return
+
+    if data == "ui:creative:contentplan:regenerate":
+        selected, state = require_channel_context(cfg, context, "creative_content_plan_regenerate")
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_content_plan_regenerate", "ui:creative:contentplan"),
+            )
+            return
+        items = creative_content_plan(cfg)
+        if not items:
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "content_plan_no_plan"), reply_markup=build_creative_content_plan_submenu(cfg))
+            return
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "content_plan_choose_regenerate"),
+            reply_markup=build_creative_content_plan_item_picker(cfg, "regenerate"),
+        )
+        return
+
+    if data == "ui:creative:contentplan:edit":
+        selected, state = require_channel_context(cfg, context, "creative_content_plan_edit")
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_content_plan_edit", "ui:creative:contentplan"),
+            )
+            return
+        items = creative_content_plan(cfg)
+        if not items:
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "content_plan_no_plan"), reply_markup=build_creative_content_plan_submenu(cfg))
+            return
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "content_plan_choose_edit"),
+            reply_markup=build_creative_content_plan_item_picker(cfg, "edit"),
+        )
+        return
+
+    if data.startswith("ui:creative:contentplan:regenerate:"):
+        try:
+            item_idx = int(data.rsplit(":", 1)[1]) - 1
+        except ValueError:
+            await q.answer()
+            return
+        items = creative_content_plan(cfg)
+        if item_idx < 0 or item_idx >= len(items):
+            await q.answer()
+            return
+        await q.answer()
+        await q.message.reply_text(ui_text(cfg, "content_plan_regenerating_item"))
+        try:
+            replacement = llm_generate_content_plan(user_id, cfg, days=1, regenerate_item=items[item_idx])
+            if not replacement:
+                raise ValueError("empty replacement")
+            new_item = replacement[0]
+            new_item["id"] = items[item_idx].get("id") or (item_idx + 1)
+            new_item["day_label"] = items[item_idx].get("day_label") or f"Day {item_idx + 1}"
+            items[item_idx] = new_item
+            cfg["creative_content_plan"] = items
+            save_client(user_id, cfg)
+            await q.message.reply_text(
+                ui_text(cfg, "content_plan_item_regenerated"),
+                reply_markup=build_creative_content_plan_submenu(cfg),
+            )
+        except Exception:
+            logger.exception("Content plan item regenerate failed for user %s", user_id)
+            await q.message.reply_text(
+                ui_text(cfg, "prompt_builder_error"),
+                reply_markup=build_creative_content_plan_submenu(cfg),
+            )
+        return
+
+    if data.startswith("ui:creative:contentplan:edit:"):
+        try:
+            item_idx = int(data.rsplit(":", 1)[1]) - 1
+        except ValueError:
+            await q.answer()
+            return
+        items = creative_content_plan(cfg)
+        if item_idx < 0 or item_idx >= len(items):
+            await q.answer()
+            return
+        await q.answer()
+        item = items[item_idx]
+        context.user_data["awaiting_content_plan_edit"] = {"channel": cfg.get("channel"), "idx": item_idx}
+        await q.message.reply_text(
+            ui_text(cfg, "content_plan_edit_prompt").format(
+                day_label=item.get("day_label") or f"Day {item_idx + 1}",
+                topic=item.get("topic") or "—",
+                angle=item.get("angle") or "—",
+            )
+        )
         return
 
     if data == "ui:creative:variety":
@@ -4652,6 +4957,35 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         set_mode_prompt(cfg, awaiting_prompt_mode, text)
         save_client(user_id, cfg)
         await send_prompt_parent_menu(update, cfg, awaiting_prompt_mode, ui_text(cfg, "prompt_edit_saved"))
+        return
+
+    awaiting_content_plan_edit = context.user_data.get("awaiting_content_plan_edit")
+    if awaiting_content_plan_edit:
+        context.user_data.pop("awaiting_content_plan_edit", None)
+        if text.lower() == "cancel":
+            await update.message.reply_text(
+                ui_text(cfg, "content_plan_edit_cancelled"),
+                reply_markup=build_creative_content_plan_submenu(cfg),
+            )
+            return
+        selected_channel = (awaiting_content_plan_edit.get("channel") or "").strip()
+        if selected_channel:
+            switch_active_channel(cfg, selected_channel)
+        idx = int(awaiting_content_plan_edit.get("idx", -1))
+        items = creative_content_plan(cfg)
+        if idx < 0 or idx >= len(items):
+            await update.message.reply_text(
+                ui_text(cfg, "content_plan_no_plan"),
+                reply_markup=build_creative_content_plan_submenu(cfg),
+            )
+            return
+        items[idx]["topic"] = text[:140]
+        cfg["creative_content_plan"] = items
+        save_client(user_id, cfg)
+        await update.message.reply_text(
+            ui_text(cfg, "content_plan_item_saved"),
+            reply_markup=build_creative_content_plan_submenu(cfg),
+        )
         return
 
     if context.user_data.get("awaiting_rss_cta_text"):

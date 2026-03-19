@@ -82,12 +82,13 @@ def build_creative_menu(labels: dict) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(labels["btn_build_prompt_ai"], callback_data="ui:creative:buildprompt"),
             ],
             [
-                InlineKeyboardButton(labels["btn_copy_my_style"], callback_data="ui:creative:copystyle"),
+                InlineKeyboardButton(labels["btn_content_plan"], callback_data="ui:creative:contentplan"),
                 InlineKeyboardButton(labels["btn_content_variety"], callback_data="ui:creative:variety"),
             ],
+            [InlineKeyboardButton(labels["btn_copy_my_style"], callback_data="ui:creative:copystyle")],
             [InlineKeyboardButton(labels["btn_scheduling"], callback_data="ui:schedule:creative:menu")],
-            [InlineKeyboardButton(labels["btn_post_format"], callback_data="ui:creative:output")],
             [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:creative:preview")],
+            [InlineKeyboardButton(labels["btn_post_format"], callback_data="ui:creative:output")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:modes")],
         ]
     )
@@ -207,6 +208,27 @@ def build_creative_output_menu(labels: dict, bold_title_enabled: bool) -> Inline
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
         ]
     )
+
+
+def build_creative_content_plan_menu(labels: dict) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(labels["btn_content_plan_generate"], callback_data="ui:creative:contentplan:generate")],
+            [InlineKeyboardButton(labels["btn_content_plan_view"], callback_data="ui:creative:contentplan:view")],
+            [InlineKeyboardButton(labels["btn_content_plan_regenerate_item"], callback_data="ui:creative:contentplan:regenerate")],
+            [InlineKeyboardButton(labels["btn_content_plan_edit_item"], callback_data="ui:creative:contentplan:edit")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
+        ]
+    )
+
+
+def build_creative_content_plan_item_picker_menu(labels: dict, items: list[dict], action: str) -> InlineKeyboardMarkup:
+    rows = []
+    for idx, item in enumerate(items, start=1):
+        topic = str(item.get("topic") or "").strip() or "—"
+        rows.append([InlineKeyboardButton(f"{idx}. {topic[:40]}", callback_data=f"ui:creative:contentplan:{action}:{idx}")])
+    rows.append([InlineKeyboardButton(labels["btn_back"], callback_data="ui:creative:contentplan")])
+    return InlineKeyboardMarkup(rows)
 
 
 def build_emoji_management_menu(labels: dict, mode: str) -> InlineKeyboardMarkup:
