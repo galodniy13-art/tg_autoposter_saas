@@ -82,6 +82,7 @@ def build_creative_menu(labels: dict) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(labels["btn_content_plan"], callback_data="ui:creative:contentplan")],
             [InlineKeyboardButton(labels["btn_source_center"], callback_data="ui:creative:sources")],
             [InlineKeyboardButton(labels["btn_content_variety"], callback_data="ui:creative:variety")],
+            [InlineKeyboardButton(labels["btn_visual_support"], callback_data="ui:creative:visual")],
             [InlineKeyboardButton(labels["btn_scheduling"], callback_data="ui:schedule:creative:menu")],
             [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:creative:preview")],
             [InlineKeyboardButton(labels["btn_copy_my_style"], callback_data="ui:creative:copystyle")],
@@ -259,6 +260,17 @@ def build_creative_source_delete_menu(labels: dict, source_type: str, items: lis
         rows.append([InlineKeyboardButton(f"❌ {idx}. {short}", callback_data=f"ui:creative:sources:{source_type}:del:{idx}")])
     rows.append([InlineKeyboardButton(labels["btn_back"], callback_data=f"ui:creative:sources:{source_type}")])
     return InlineKeyboardMarkup(rows)
+
+
+def build_creative_visual_support_menu(labels: dict) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(labels["btn_visual_generate_idea"], callback_data="ui:creative:visual:idea")],
+            [InlineKeyboardButton(labels["btn_visual_generate_search_query"], callback_data="ui:creative:visual:search")],
+            [InlineKeyboardButton(labels["btn_visual_generate_ai_prompt"], callback_data="ui:creative:visual:aiprompt")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
+        ]
+    )
 
 
 def build_emoji_management_menu(labels: dict, mode: str) -> InlineKeyboardMarkup:
