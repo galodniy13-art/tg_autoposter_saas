@@ -38,6 +38,7 @@ from keyboards import (
     build_creative_source_center_menu,
     build_creative_source_list_menu,
     build_creative_source_delete_menu,
+    build_creative_visual_support_menu,
     build_asset_management_menu,
     build_emoji_management_menu,
     build_feed_management_menu,
@@ -449,6 +450,9 @@ DEFAULT_CLIENT = {
     "creative_idea_bank": [],
     "creative_inspiration_links": [],
     "creative_source_snippets": [],
+    "last_visual_idea": "",
+    "last_visual_search_query": "",
+    "last_visual_ai_prompt": "",
 
     "max_dedupe": 1500,
     "fetch_entries_per_feed": 15,
@@ -519,6 +523,9 @@ CHANNEL_SCOPED_KEYS = (
     "creative_idea_bank",
     "creative_inspiration_links",
     "creative_source_snippets",
+    "last_visual_idea",
+    "last_visual_search_query",
+    "last_visual_ai_prompt",
 )
 
 # ===================== Storage helpers =====================
@@ -1931,6 +1938,81 @@ def creative_source_context_block(cfg: dict, *, for_plan: bool) -> str:
     return guidance + "\n" + "\n".join(f"- {line}" for line in lines) + "\n"
 
 
+def creative_current_topic_item(cfg: dict) -> dict | None:
+    items = creative_content_plan(cfg)
+    for item in items:
+        if (item.get("topic") or "").strip():
+            return item
+    return None
+
+
+def creative_visual_context(cfg: dict, selected_channel: str) -> dict:
+    item = creative_current_topic_item(cfg)
+    return {
+        "channel": selected_channel or str(cfg.get("channel") or "").strip(),
+        "creative_prompt": get_mode_prompt(0, cfg, "creative"),
+        "topic": str((item or {}).get("topic") or "").strip(),
+        "angle": str((item or {}).get("angle") or "").strip(),
+        "post_type": str((item or {}).get("post_type") or "").strip(),
+        "goal": str((item or {}).get("goal") or "").strip(),
+        "topic_pillars": creative_source_items(cfg, "creative_topic_pillars"),
+        "idea_bank": creative_source_items(cfg, "creative_idea_bank"),
+        "source_snippets": creative_source_items(cfg, "creative_source_snippets"),
+    }
+
+
+def llm_generate_visual_support(cfg: dict, selected_channel: str, action: str) -> str:
+    context_data = creative_visual_context(cfg, selected_channel)
+    action_instructions = {
+        "idea": "Return a short practical visual concept in 4 bullets: scene/mood, image type, composition idea, emotional tone.",
+        "search": "Return one concise web/image search query only. No bullets, no quotes, no explanations.",
+        "aiprompt": "Return one polished AI image prompt for social media/influencer style. Visually descriptive and practical.",
+    }
+    user_content = (
+        "Generate visual support for a Telegram creator post.\n"
+        f"Channel: {context_data['channel'] or 'N/A'}\n"
+        f"Creative prompt: {context_data['creative_prompt']}\n"
+        f"Current topic: {context_data['topic'] or 'N/A'}\n"
+        f"Angle: {context_data['angle'] or 'N/A'}\n"
+        f"Post type: {context_data['post_type'] or 'N/A'}\n"
+        f"Goal: {context_data['goal'] or 'N/A'}\n"
+        f"Topic pillars: {'; '.join(context_data['topic_pillars'][:6]) or 'N/A'}\n"
+        f"Idea bank: {'; '.join(context_data['idea_bank'][:6]) or 'N/A'}\n"
+        f"Source snippets: {'; '.join(context_data['source_snippets'][:4]) or 'N/A'}\n"
+        "Do not mention scraping/downloading images. The user will search/create visuals manually.\n"
+        f"{action_instructions[action]}"
+    )
+
+    if LLM_PROVIDER == "openai_compat":
+        url = OPENAI_BASE_URL.rstrip("/") + "/chat/completions"
+        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+        payload = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": "You generate concise visual guidance for creator content."},
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": 0.8,
+        }
+        r = requests.post(url, headers=headers, json=payload, timeout=60)
+        r.raise_for_status()
+        out = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "")
+    else:
+        payload = {
+            "model": OLLAMA_MODEL,
+            "prompt": "You generate concise visual guidance for creator content.\n\n" + user_content,
+            "stream": False,
+        }
+        r = requests.post(OLLAMA_URL, json=payload, timeout=60)
+        r.raise_for_status()
+        out = r.json().get("response", "")
+
+    cleaned = clean_text(out).strip()
+    cleaned = re.sub(r"(?is)^```[a-z0-9_\\-]*\\s*", "", cleaned).strip()
+    cleaned = re.sub(r"(?is)\\s*```$", "", cleaned).strip()
+    return cleaned[:1200]
+
+
 CREATIVE_SOURCE_META = {
     "topic_pillars": {
         "key": "creative_topic_pillars",
@@ -2183,6 +2265,10 @@ def build_creative_source_delete_submenu(cfg: dict, source_type: str, items: lis
     return build_creative_source_delete_menu(ui_pack(cfg), source_type, items)
 
 
+def build_creative_visual_support_submenu(cfg: dict) -> InlineKeyboardMarkup:
+    return build_creative_visual_support_menu(ui_pack(cfg))
+
+
 def creative_source_list_text(cfg: dict, source_type: str, selected_channel: str) -> str:
     meta = CREATIVE_SOURCE_META[source_type]
     items = creative_source_items(cfg, meta["key"])
@@ -2193,6 +2279,16 @@ def creative_source_list_text(cfg: dict, source_type: str, selected_channel: str
     for idx, item in enumerate(items, start=1):
         lines.append(f"{idx}) {item}")
     return "\n".join(lines)
+
+
+def creative_visual_support_menu_text(cfg: dict, selected_channel: str) -> str:
+    return (
+        ui_text(cfg, "creative_visual_support_title")
+        + "\n\n"
+        + selected_channel_text(cfg, selected_channel)
+        + "\n\n"
+        + ui_text(cfg, "creative_visual_support_intro")
+    )
 
 
 def creative_content_plan_menu_text(cfg: dict, selected_channel: str) -> str:
@@ -2916,6 +3012,7 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
         "creative_buildprompt",
         "creative_copystyle",
         "creative_variety",
+        "creative_visual",
         "creative_content_plan",
         "creative_content_plan_regenerate",
         "creative_content_plan_edit",
@@ -3122,6 +3219,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             q.data = mapped
         elif action == "creative_variety":
             q.data = "ui:creative:variety"
+        elif action == "creative_visual":
+            q.data = "ui:creative:visual"
         elif action == "creative_content_plan":
             q.data = "ui:creative:contentplan"
         elif action == "creative_content_plan_regenerate":
@@ -3246,6 +3345,64 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.edit_message_text(text=text, reply_markup=build_creative_content_plan_submenu(cfg))
         except BadRequest:
             await q.message.reply_text(text=text, reply_markup=build_creative_content_plan_submenu(cfg))
+        return
+
+    if data == "ui:creative:visual":
+        if not await enforce_mode_paywall(update, cfg, "creator"):
+            return
+        selected, state = require_channel_context(cfg, context, "creative_visual")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_visual", "ui:mode:creative:menu"),
+            )
+            return
+        await q.answer()
+        text = creative_visual_support_menu_text(cfg, selected)
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_creative_visual_support_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_creative_visual_support_submenu(cfg))
+        return
+
+    if data in ("ui:creative:visual:idea", "ui:creative:visual:search", "ui:creative:visual:aiprompt"):
+        selected, state = require_channel_context(cfg, context, "creative_visual")
+        if state in {"empty", "pick"}:
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        key_map = {
+            "ui:creative:visual:idea": ("idea", "creative_visual_generating_idea", "creative_visual_label_idea", "last_visual_idea"),
+            "ui:creative:visual:search": ("search", "creative_visual_generating_search_query", "creative_visual_label_search_query", "last_visual_search_query"),
+            "ui:creative:visual:aiprompt": ("aiprompt", "creative_visual_generating_ai_prompt", "creative_visual_label_ai_prompt", "last_visual_ai_prompt"),
+        }
+        action, progress_key, label_key, save_key = key_map[data]
+        await q.answer()
+        await q.message.reply_text(ui_text(cfg, progress_key))
+        try:
+            result = llm_generate_visual_support(cfg, selected, action)
+            if not result:
+                raise ValueError("empty visual support output")
+            cfg[save_key] = result
+            save_client(user_id, cfg)
+            prefix = ""
+            if not creative_current_topic_item(cfg):
+                prefix = ui_text(cfg, "creative_visual_topic_fallback") + "\n\n"
+            await q.message.reply_text(
+                prefix + f"{ui_text(cfg, label_key)}:\n{result}",
+                reply_markup=build_creative_visual_support_submenu(cfg),
+            )
+        except Exception:
+            logger.exception("Creative visual support failed for user %s", user_id)
+            await q.message.reply_text(
+                ui_text(cfg, "creative_visual_error"),
+                reply_markup=build_creative_visual_support_submenu(cfg),
+            )
         return
 
     if data == "ui:creative:contentplan:generate":
