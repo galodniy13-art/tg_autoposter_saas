@@ -77,17 +77,14 @@ def build_modes_menu(labels: dict) -> InlineKeyboardMarkup:
 def build_creative_menu(labels: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton(labels["btn_edit_prompt"], callback_data="ui:creative:editprompt"),
-                InlineKeyboardButton(labels["btn_build_prompt_ai"], callback_data="ui:creative:buildprompt"),
-            ],
-            [
-                InlineKeyboardButton(labels["btn_content_plan"], callback_data="ui:creative:contentplan"),
-                InlineKeyboardButton(labels["btn_content_variety"], callback_data="ui:creative:variety"),
-            ],
-            [InlineKeyboardButton(labels["btn_copy_my_style"], callback_data="ui:creative:copystyle")],
+            [InlineKeyboardButton(labels["btn_edit_prompt"], callback_data="ui:creative:editprompt")],
+            [InlineKeyboardButton(labels["btn_build_prompt_ai"], callback_data="ui:creative:buildprompt")],
+            [InlineKeyboardButton(labels["btn_content_plan"], callback_data="ui:creative:contentplan")],
+            [InlineKeyboardButton(labels["btn_source_center"], callback_data="ui:creative:sources")],
+            [InlineKeyboardButton(labels["btn_content_variety"], callback_data="ui:creative:variety")],
             [InlineKeyboardButton(labels["btn_scheduling"], callback_data="ui:schedule:creative:menu")],
             [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:creative:preview")],
+            [InlineKeyboardButton(labels["btn_copy_my_style"], callback_data="ui:creative:copystyle")],
             [InlineKeyboardButton(labels["btn_post_format"], callback_data="ui:creative:output")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:modes")],
         ]
@@ -228,6 +225,39 @@ def build_creative_content_plan_item_picker_menu(labels: dict, items: list[dict]
         topic = str(item.get("topic") or "").strip() or "—"
         rows.append([InlineKeyboardButton(f"{idx}. {topic[:40]}", callback_data=f"ui:creative:contentplan:{action}:{idx}")])
     rows.append([InlineKeyboardButton(labels["btn_back"], callback_data="ui:creative:contentplan")])
+    return InlineKeyboardMarkup(rows)
+
+
+def build_creative_source_center_menu(labels: dict) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(labels["btn_topic_pillars"], callback_data="ui:creative:sources:topic_pillars")],
+            [InlineKeyboardButton(labels["btn_idea_bank"], callback_data="ui:creative:sources:idea_bank")],
+            [InlineKeyboardButton(labels["btn_inspiration_links"], callback_data="ui:creative:sources:inspiration_links")],
+            [InlineKeyboardButton(labels["btn_source_snippets"], callback_data="ui:creative:sources:source_snippets")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
+        ]
+    )
+
+
+def build_creative_source_list_menu(labels: dict, source_type: str) -> InlineKeyboardMarkup:
+    base = f"ui:creative:sources:{source_type}"
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(labels["btn_view_items"], callback_data=f"{base}:view")],
+            [InlineKeyboardButton(labels["btn_add_item"], callback_data=f"{base}:add")],
+            [InlineKeyboardButton(labels["btn_delete_item"], callback_data=f"{base}:delete")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:creative:sources")],
+        ]
+    )
+
+
+def build_creative_source_delete_menu(labels: dict, source_type: str, items: list[str]) -> InlineKeyboardMarkup:
+    rows = []
+    for idx, item in enumerate(items, start=1):
+        short = item if len(item) <= 48 else item[:47] + "…"
+        rows.append([InlineKeyboardButton(f"❌ {idx}. {short}", callback_data=f"ui:creative:sources:{source_type}:del:{idx}")])
+    rows.append([InlineKeyboardButton(labels["btn_back"], callback_data=f"ui:creative:sources:{source_type}")])
     return InlineKeyboardMarkup(rows)
 
 

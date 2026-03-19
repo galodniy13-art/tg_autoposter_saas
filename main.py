@@ -35,6 +35,9 @@ from keyboards import (
     build_creative_output_menu,
     build_creative_content_plan_menu,
     build_creative_content_plan_item_picker_menu,
+    build_creative_source_center_menu,
+    build_creative_source_list_menu,
+    build_creative_source_delete_menu,
     build_asset_management_menu,
     build_emoji_management_menu,
     build_feed_management_menu,
@@ -442,6 +445,10 @@ DEFAULT_CLIENT = {
     "creative_avoid_repetition": True,
     "creative_last_post_type_idx": -1,
     "creative_content_plan": [],
+    "creative_topic_pillars": [],
+    "creative_idea_bank": [],
+    "creative_inspiration_links": [],
+    "creative_source_snippets": [],
 
     "max_dedupe": 1500,
     "fetch_entries_per_feed": 15,
@@ -508,6 +515,10 @@ CHANNEL_SCOPED_KEYS = (
     "creative_avoid_repetition",
     "creative_last_post_type_idx",
     "creative_content_plan",
+    "creative_topic_pillars",
+    "creative_idea_bank",
+    "creative_inspiration_links",
+    "creative_source_snippets",
 )
 
 # ===================== Storage helpers =====================
@@ -1882,6 +1893,76 @@ def creative_content_plan(cfg: dict) -> list[dict]:
     return normalized
 
 
+def creative_source_items(cfg: dict, key: str) -> list[str]:
+    raw = cfg.get(key)
+    if not isinstance(raw, list):
+        return []
+    normalized: list[str] = []
+    for value in raw:
+        item = str(value or "").strip()
+        if item:
+            normalized.append(item)
+    return normalized
+
+
+def creative_source_context_block(cfg: dict, *, for_plan: bool) -> str:
+    pillars = creative_source_items(cfg, "creative_topic_pillars")
+    ideas = creative_source_items(cfg, "creative_idea_bank")
+    links = creative_source_items(cfg, "creative_inspiration_links")
+    snippets = creative_source_items(cfg, "creative_source_snippets")
+    lines: list[str] = []
+    if pillars:
+        lines.append("Topic pillars: " + "; ".join(pillars[:8]))
+    if ideas:
+        lines.append("Idea bank: " + "; ".join(ideas[:8]))
+    if links:
+        take = 3 if for_plan else 2
+        lines.append("Inspiration links (lightly reference themes only): " + "; ".join(links[:take]))
+    if snippets:
+        take = 4 if for_plan else 2
+        lines.append("Source snippets/notes (light supporting context): " + "; ".join(snippets[:take]))
+    if not lines:
+        return ""
+    guidance = (
+        "Use this source context as supporting material. Keep the user's creative prompt primary."
+        if not for_plan
+        else "Use available source context to enrich variety and reduce repetition. Do not force every item into every day."
+    )
+    return guidance + "\n" + "\n".join(f"- {line}" for line in lines) + "\n"
+
+
+CREATIVE_SOURCE_META = {
+    "topic_pillars": {
+        "key": "creative_topic_pillars",
+        "title_key": "source_topic_pillars_title",
+        "empty_key": "source_topic_pillars_empty",
+        "add_prompt_key": "source_topic_pillars_add_prompt",
+        "saved_key": "source_topic_pillars_saved",
+    },
+    "idea_bank": {
+        "key": "creative_idea_bank",
+        "title_key": "source_idea_bank_title",
+        "empty_key": "source_idea_bank_empty",
+        "add_prompt_key": "source_idea_bank_add_prompt",
+        "saved_key": "source_idea_bank_saved",
+    },
+    "inspiration_links": {
+        "key": "creative_inspiration_links",
+        "title_key": "source_inspiration_links_title",
+        "empty_key": "source_inspiration_links_empty",
+        "add_prompt_key": "source_inspiration_links_add_prompt",
+        "saved_key": "source_inspiration_links_saved",
+    },
+    "source_snippets": {
+        "key": "creative_source_snippets",
+        "title_key": "source_source_snippets_title",
+        "empty_key": "source_source_snippets_empty",
+        "add_prompt_key": "source_source_snippets_add_prompt",
+        "saved_key": "source_source_snippets_saved",
+    },
+}
+
+
 def llm_generate_content_plan(
     user_id: int,
     cfg: dict,
@@ -1907,6 +1988,9 @@ def llm_generate_content_plan(
         "Each item object keys: id, day_label, topic, angle, post_type, goal, status.\n"
         "Set status to planned.\n"
     )
+    sources_block = creative_source_context_block(cfg, for_plan=True)
+    if sources_block:
+        base_instruction += sources_block
     if regenerate_item:
         base_instruction += (
             "Generate exactly one replacement item and keep it fresh compared with this existing item:\n"
@@ -1970,6 +2054,9 @@ def creator_make_post(user_id: int, cfg: dict) -> str:
         f"{variation_guidance[variation]}\n"
         f"{emoji_style_note(cfg, 'creative')}"
     )
+    sources_block = creative_source_context_block(cfg, for_plan=False)
+    if sources_block:
+        prompt += "\n" + sources_block
 
     if avoid_repetition:
         prompt += "Avoid repeating the same hook, structure, CTA, and sentence rhythm too often. Keep it light and natural.\n"
@@ -2082,6 +2169,30 @@ def build_creative_content_plan_submenu(cfg: dict) -> InlineKeyboardMarkup:
 
 def build_creative_content_plan_item_picker(cfg: dict, action: str) -> InlineKeyboardMarkup:
     return build_creative_content_plan_item_picker_menu(ui_pack(cfg), creative_content_plan(cfg), action)
+
+
+def build_creative_source_center_submenu(cfg: dict) -> InlineKeyboardMarkup:
+    return build_creative_source_center_menu(ui_pack(cfg))
+
+
+def build_creative_source_list_submenu(cfg: dict, source_type: str) -> InlineKeyboardMarkup:
+    return build_creative_source_list_menu(ui_pack(cfg), source_type)
+
+
+def build_creative_source_delete_submenu(cfg: dict, source_type: str, items: list[str]) -> InlineKeyboardMarkup:
+    return build_creative_source_delete_menu(ui_pack(cfg), source_type, items)
+
+
+def creative_source_list_text(cfg: dict, source_type: str, selected_channel: str) -> str:
+    meta = CREATIVE_SOURCE_META[source_type]
+    items = creative_source_items(cfg, meta["key"])
+    lines = [ui_text(cfg, meta["title_key"]), "", selected_channel_text(cfg, selected_channel), ""]
+    if not items:
+        lines.append(ui_text(cfg, meta["empty_key"]))
+        return "\n".join(lines)
+    for idx, item in enumerate(items, start=1):
+        lines.append(f"{idx}) {item}")
+    return "\n".join(lines)
 
 
 def creative_content_plan_menu_text(cfg: dict, selected_channel: str) -> str:
@@ -2808,6 +2919,11 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
         "creative_content_plan",
         "creative_content_plan_regenerate",
         "creative_content_plan_edit",
+        "creative_sources",
+        "creative_sources_topic_pillars",
+        "creative_sources_idea_bank",
+        "creative_sources_inspiration_links",
+        "creative_sources_source_snippets",
         "creative_preview",
         "rss_menu",
         "rss_editprompt",
@@ -3012,6 +3128,12 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             q.data = "ui:creative:contentplan:regenerate"
         elif action == "creative_content_plan_edit":
             q.data = "ui:creative:contentplan:edit"
+        elif action == "creative_sources":
+            q.data = "ui:creative:sources"
+        elif action.startswith("creative_sources_"):
+            source_type = action.replace("creative_sources_", "", 1)
+            if source_type in CREATIVE_SOURCE_META:
+                q.data = f"ui:creative:sources:{source_type}"
         elif action in ("creative_preview", "rss_preview"):
             mapped = "ui:creative:preview" if action == "creative_preview" else "ui:rss:preview"
             q.data = mapped
@@ -3264,6 +3386,107 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
         )
         return
+
+    if data == "ui:creative:sources":
+        if not await enforce_mode_paywall(update, cfg, "creator"):
+            return
+        selected, state = require_channel_context(cfg, context, "creative_sources")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_sources", "ui:mode:creative:menu"),
+            )
+            return
+        await q.answer()
+        text = ui_text(cfg, "source_center_title") + "\n\n" + selected_channel_text(cfg, selected)
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_creative_source_center_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_creative_source_center_submenu(cfg))
+        return
+
+    if data.startswith("ui:creative:sources:"):
+        parts = data.split(":")
+        if len(parts) >= 4:
+            source_type = parts[3]
+            meta = CREATIVE_SOURCE_META.get(source_type)
+            if not meta:
+                await q.answer()
+                return
+            selected, state = require_channel_context(cfg, context, f"creative_sources_{source_type}")
+            if state == "pick":
+                await q.answer()
+                await q.message.reply_text(
+                    ui_text(cfg, "channel_picker_title"),
+                    reply_markup=build_channel_picker(cfg, f"creative_sources_{source_type}", "ui:creative:sources"),
+                )
+                return
+            selected_channel = selected or (cfg.get("channel") or "")
+
+            if len(parts) == 4:
+                await q.answer()
+                text = creative_source_list_text(cfg, source_type, selected_channel)
+                submenu = build_creative_source_list_submenu(cfg, source_type)
+                try:
+                    await q.edit_message_text(text=text, reply_markup=submenu)
+                except BadRequest:
+                    await q.message.reply_text(text=text, reply_markup=submenu)
+                return
+
+            action = parts[4]
+            if action == "view":
+                await q.answer()
+                await q.message.reply_text(
+                    creative_source_list_text(cfg, source_type, selected_channel),
+                    reply_markup=build_creative_source_list_submenu(cfg, source_type),
+                )
+                return
+            if action == "add":
+                await q.answer()
+                context.user_data["awaiting_creative_source_add"] = {
+                    "channel": cfg.get("channel"),
+                    "source_type": source_type,
+                }
+                await q.message.reply_text(ui_text(cfg, meta["add_prompt_key"]))
+                return
+            if action == "delete":
+                await q.answer()
+                items = creative_source_items(cfg, meta["key"])
+                if not items:
+                    await q.message.reply_text(
+                        ui_text(cfg, "source_delete_empty"),
+                        reply_markup=build_creative_source_list_submenu(cfg, source_type),
+                    )
+                    return
+                await q.message.reply_text(
+                    ui_text(cfg, "source_delete_choose"),
+                    reply_markup=build_creative_source_delete_submenu(cfg, source_type, items),
+                )
+                return
+            if action == "del" and len(parts) >= 6:
+                try:
+                    item_idx = int(parts[5]) - 1
+                except ValueError:
+                    await q.answer()
+                    return
+                items = creative_source_items(cfg, meta["key"])
+                if item_idx < 0 or item_idx >= len(items):
+                    await q.answer()
+                    return
+                removed = items.pop(item_idx)
+                cfg[meta["key"]] = items
+                save_client(user_id, cfg)
+                await q.answer()
+                await q.message.reply_text(
+                    ui_text(cfg, "source_item_deleted").format(item=removed[:80]),
+                    reply_markup=build_creative_source_list_submenu(cfg, source_type),
+                )
+                return
 
     if data == "ui:creative:variety":
         if not await enforce_mode_paywall(update, cfg, "creator"):
@@ -4985,6 +5208,31 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(
             ui_text(cfg, "content_plan_item_saved"),
             reply_markup=build_creative_content_plan_submenu(cfg),
+        )
+        return
+
+    awaiting_source_add = context.user_data.get("awaiting_creative_source_add")
+    if awaiting_source_add:
+        if text.lower() == "cancel":
+            context.user_data.pop("awaiting_creative_source_add", None)
+            await update.message.reply_text(ui_text(cfg, "source_add_cancelled"))
+            return
+        context.user_data.pop("awaiting_creative_source_add", None)
+        selected_channel = (awaiting_source_add.get("channel") or "").strip()
+        if selected_channel:
+            switch_active_channel(cfg, selected_channel)
+        source_type = str(awaiting_source_add.get("source_type") or "").strip()
+        meta = CREATIVE_SOURCE_META.get(source_type)
+        if not meta:
+            await update.message.reply_text(ui_text(cfg, "prompt_builder_error"))
+            return
+        items = creative_source_items(cfg, meta["key"])
+        items.append(text[:400])
+        cfg[meta["key"]] = items[-100:]
+        save_client(user_id, cfg)
+        await update.message.reply_text(
+            ui_text(cfg, meta["saved_key"]),
+            reply_markup=build_creative_source_list_submenu(cfg, source_type),
         )
         return
 
