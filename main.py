@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import io
 import json
 import logging
@@ -6,6 +7,7 @@ import os
 import re
 import threading
 import tempfile
+import time
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl, urlencode
@@ -382,6 +384,8 @@ DEFAULT_CLIENT = {
     "channel_slots": 0,
     "feeds": [],
     "posted_urls": [],
+    "posted_story_fingerprints": [],
+    "posted_item_meta": [],
     "include_rss_source_link": True,
     "use_rss_feed_image": True,
     "rss_cta_enabled": False,
@@ -470,6 +474,8 @@ CHANNEL_SCOPED_KEYS = (
     "creative_prompt",
     "feeds",
     "posted_urls",
+    "posted_story_fingerprints",
+    "posted_item_meta",
     "include_rss_source_link",
     "use_rss_feed_image",
     "rss_cta_enabled",
@@ -887,12 +893,134 @@ def _find_feed_by_url(feeds: list, url: str) -> bool:
     return any(_feed_url(item) == target for item in feeds)
 
 # ===================== RSS helpers =====================
+def _entry_time_struct(entry):
+    return _entry_get(entry, "published_parsed") or _entry_get(entry, "updated_parsed")
+
+
+def _entry_time_iso(entry) -> str:
+    t = _entry_time_struct(entry)
+    try:
+        if t:
+            return datetime.fromtimestamp(time.mktime(t), tz=timezone.utc).isoformat()
+    except Exception:
+        pass
+    return ""
+
+
+def _story_title_normalized(title: str) -> str:
+    cleaned = clean_text(title).lower()
+    cleaned = re.sub(r"https?://\S+", " ", cleaned)
+    cleaned = re.sub(r"[^a-zа-яё0-9\s]", " ", cleaned, flags=re.IGNORECASE)
+    return " ".join(cleaned.split())
+
+
+def _story_title_fingerprint(title: str) -> str:
+    normalized = _story_title_normalized(title)
+    if not normalized:
+        return ""
+    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:20]
+
+
+def _story_similarity(left: str, right: str) -> float:
+    lt = set(_story_title_normalized(left).split())
+    rt = set(_story_title_normalized(right).split())
+    if not lt or not rt:
+        return 0.0
+    return len(lt & rt) / max(1, len(lt | rt))
+
+
+def _pruned_posted_meta(cfg: dict) -> list[dict]:
+    raw = cfg.get("posted_item_meta")
+    if not isinstance(raw, list):
+        return []
+    now = datetime.now(timezone.utc)
+    pruned: list[dict] = []
+    for item in raw[-max(10, int(cfg.get("max_dedupe", 1500) or 1500)):]:
+        if not isinstance(item, dict):
+            continue
+        ts = str(item.get("posted_at") or "").strip()
+        if ts:
+            try:
+                posted_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                if now - posted_dt > timedelta(days=4):
+                    continue
+            except Exception:
+                pass
+        pruned.append(item)
+    return pruned
+
+
+def _assess_rss_candidate_relevance(title: str, summary: str, published_struct, now_utc: datetime) -> tuple[bool, int]:
+    text = clean_text(f"{title} {summary}")
+    title_words = re.findall(r"[A-Za-zА-Яа-яЁё0-9]{2,}", clean_text(title))
+    all_words = re.findall(r"[A-Za-zА-Яа-яЁё0-9]{2,}", text)
+    has_subject = bool(re.search(r"\b[A-ZА-ЯЁ][a-zа-яё]{2,}\b", title or ""))
+    has_digits = bool(re.search(r"\d", text))
+
+    context_ok = len(title_words) >= 4 and len(all_words) >= 10 and (len(clean_text(title)) >= 24 or len(clean_text(summary)) >= 90)
+    if not context_ok and not (has_subject and has_digits and len(all_words) >= 8):
+        return False, -100
+
+    lower = text.lower()
+    momentum = bool(re.search(r"\b(live|reaction|reacts|comment|post-?match|after the game|fan reaction|x\.com|twitter|thread)\b", lower))
+    analysis = bool(re.search(r"\b(analysis|recap|report|breakdown|explained|preview|tactical)\b", lower))
+    breaking = bool(re.search(r"\b(breaking|official|confirmed|lineup|injury|final score|wins|signed|transfer)\b", lower))
+    low_signal = bool(re.search(r"\b(opinion|rumor|rumour|hot take|fan(s)?|debate|watch along)\b", lower))
+    importance = (2 if breaking else 0) + (1 if analysis else 0) + (1 if has_digits else 0) - (1 if low_signal else 0)
+    if importance <= 0:
+        return False, -80
+
+    if published_struct:
+        try:
+            published_dt = datetime.fromtimestamp(time.mktime(published_struct), tz=timezone.utc)
+            age = now_utc - published_dt
+            max_age = timedelta(hours=6 if momentum else (72 if analysis else 36))
+            if age > max_age:
+                return False, -60
+        except Exception:
+            pass
+
+    score = importance * 10 + min(len(all_words), 45)
+    if momentum:
+        score -= 5
+    return True, score
+
+
+def _record_posted_rss_item(cfg: dict, link: str, title: str, feed_url: str, published_struct=None) -> None:
+    cfg.setdefault("posted_urls", [])
+    cfg["posted_urls"].append(link)
+    cfg["posted_urls"] = cfg["posted_urls"][-int(cfg.get("max_dedupe", 1500)):]
+
+    normalized_title = _story_title_normalized(title)
+    fingerprint = _story_title_fingerprint(title)
+    domain = (urlsplit(feed_url).netloc or urlsplit(link).netloc or "").lower()
+    item_meta = _pruned_posted_meta(cfg)
+    item_meta.append(
+        {
+            "url": link,
+            "title": clean_text(title)[:300],
+            "normalized_title": normalized_title[:220],
+            "fingerprint": fingerprint,
+            "source_domain": domain[:120],
+            "published_at": _entry_time_iso({"published_parsed": published_struct}) if published_struct else "",
+            "posted_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    limit = max(10, int(cfg.get("max_dedupe", 1500) or 1500))
+    cfg["posted_item_meta"] = item_meta[-limit:]
+    cfg["posted_story_fingerprints"] = [x.get("fingerprint") for x in cfg["posted_item_meta"] if isinstance(x, dict) and x.get("fingerprint")]
+
+
 def pick_newest_unseen(cfg: dict):
     feeds = cfg.get("feeds", [])
     posted = set(cfg.get("posted_urls", []))
-    best = None  # (published, title, link_normalized, feed_url)
+    posted_meta = _pruned_posted_meta(cfg)
+    cfg["posted_item_meta"] = posted_meta
+    cfg["posted_story_fingerprints"] = [x.get("fingerprint") for x in posted_meta if x.get("fingerprint")]
+    best = None  # (score, published, title, link_normalized, feed_url)
 
     per_feed = int(cfg.get("fetch_entries_per_feed", 15))
+    now_utc = datetime.now(timezone.utc)
     for feed_entry in feeds:
         feed_url = _feed_url(feed_entry)
         if not feed_url:
@@ -908,13 +1036,35 @@ def pick_newest_unseen(cfg: dict):
                 continue
 
             title = getattr(e, "title", "Untitled")
+            summary = clean_text(_entry_get(e, "summary", "") or _entry_get(e, "description", "") or "")
             published = getattr(e, "published_parsed", None)
-            key = (published or (0,), title)
+            is_relevant, score = _assess_rss_candidate_relevance(title, summary, published, now_utc)
+            if not is_relevant:
+                continue
 
-            if best is None or key > ((best[0] or (0,)), best[1]):
-                best = (published, title, link_n, feed_url)
+            fp_title = _story_title_fingerprint(title)
+            skip_duplicate_story = False
+            for posted_item in posted_meta:
+                if not isinstance(posted_item, dict):
+                    continue
+                posted_fp = str(posted_item.get("fingerprint") or "")
+                posted_title = str(posted_item.get("title") or "")
+                if fp_title and posted_fp and fp_title == posted_fp:
+                    skip_duplicate_story = True
+                    break
+                if posted_title and _story_similarity(posted_title, title) >= 0.86:
+                    skip_duplicate_story = True
+                    break
+            if skip_duplicate_story:
+                continue
 
-    return best
+            key = (score, published or (0,), title)
+            if best is None or key > (best[0], best[1] or (0,), best[2]):
+                best = (score, published, title, link_n, feed_url)
+
+    if not best:
+        return None
+    return best[1], best[2], best[3], best[4]
 
 def extract_summary_for_link(feed_url: str, link_normalized: str, limit: int = 20) -> str:
     fp = feedparser.parse(feed_url)
@@ -5921,15 +6071,13 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if mode == "both":
         best = pick_newest_unseen(cfg) if feeds else None
         if best:
-            _, title, link, src = best
+            published, title, link, src = best
             summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
             msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
             image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
             send_image_url, temp_file = await prepare_rss_image_for_sending(context.bot, cfg, user_id, image_url)
             await send_rss_to_channel(context.bot, cfg, channel, msg, link, send_image_url, temp_file)
-            cfg.setdefault("posted_urls", [])
-            cfg["posted_urls"].append(link)
-            cfg["posted_urls"] = cfg["posted_urls"][-int(cfg.get("max_dedupe", 1500)):]
+            _record_posted_rss_item(cfg, link, title, src, published)
             bump_daily_count(cfg, "rss")
             save_client(user_id, cfg)
             await reply_ui(update, "✅ Posted 1 RSS item (both mode).", cfg, show_menu=True)
@@ -5952,7 +6100,7 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await reply_ui(update, "No new items found (or everything already posted).", cfg, show_menu=True)
         return
 
-    _, title, link, src = best
+    published, title, link, src = best
     summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
     msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
     image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
@@ -5960,9 +6108,7 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     await send_rss_to_channel(context.bot, cfg, channel, msg, link, send_image_url, temp_file)
 
-    cfg.setdefault("posted_urls", [])
-    cfg["posted_urls"].append(link)
-    cfg["posted_urls"] = cfg["posted_urls"][-int(cfg.get("max_dedupe", 1500)):]
+    _record_posted_rss_item(cfg, link, title, src, published)
     bump_daily_count(cfg, "rss")
     save_client(user_id, cfg)
     await reply_ui(update, "✅ Posted 1 item.", cfg, show_menu=True)
@@ -6360,7 +6506,7 @@ async def autopost_loop(app: Application) -> None:
                     if not should_run_mode_now(cfg, "rss", now, last_post_at, user_id, channel):
                         continue
 
-                    _, title, link, src = best
+                    published, title, link, src = best
                     summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
                     msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
                     image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
@@ -6368,9 +6514,7 @@ async def autopost_loop(app: Application) -> None:
 
                     await send_rss_to_channel(app.bot, cfg, channel, msg, link, send_image_url, temp_file)
 
-                    cfg.setdefault("posted_urls", [])
-                    cfg["posted_urls"].append(link)
-                    cfg["posted_urls"] = cfg["posted_urls"][-int(cfg.get("max_dedupe", 1500)):]
+                    _record_posted_rss_item(cfg, link, title, src, published)
                     bump_daily_count(cfg, "rss")
                     mark_mode_scheduled(cfg, "rss", now)
                     save_client(user_id, cfg)
