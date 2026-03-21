@@ -1,4 +1,5 @@
 import asyncio
+import html
 import hashlib
 import io
 import json
@@ -1440,6 +1441,26 @@ def _normalize_image_url(url: str, base_url: str = "") -> str | None:
     return full
 
 
+def _looks_like_image_resource(url: str) -> bool:
+    parsed = urlsplit(url or "")
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return False
+
+    path = (parsed.path or "").lower()
+    if re.search(r"\.(jpg|jpeg|png|webp|gif|bmp|svg|avif|heic|heif|tiff?)$", path):
+        return True
+    if re.search(r"\.(html?|php|asp|aspx|json|xml|txt)$", path):
+        return False
+
+    query_l = (parsed.query or "").lower()
+    if any(k in query_l for k in ("format=", "fm=", "ext=", "image=", "img=", "name=orig", "name=large", "name=4096x4096")):
+        return True
+    if any(p in path for p in ("/media/", "/image/", "/images/", "/img/", "/photo/", "/photos/")):
+        return True
+
+    return True
+
+
 def _is_thumbnailish_url(url: str) -> bool:
     return bool(re.search(r"(?i)(thumb|thumbnail|sprite|icon|avatar|\bsmall\b|\bmini\b|\b120x\b|\b150x\b)", url or ""))
 
@@ -1532,6 +1553,8 @@ def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int =
             normalized = _normalize_image_url(url, base_url)
             if not normalized:
                 return
+            if not _looks_like_image_resource(normalized):
+                return
             w = _safe_int(width)
             h = _safe_int(height)
             if _is_too_small(w, h):
@@ -1556,6 +1579,12 @@ def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int =
             if "image" in etype or not etype:
                 consider(url, priority=400, width=item.get("width"), height=item.get("height"), base_url=link)
 
+        media_thumbnail = _entry_get(e, "media_thumbnail", []) or []
+        for item in media_thumbnail:
+            if not isinstance(item, dict):
+                continue
+            consider(item.get("url") or "", priority=300, width=item.get("width"), height=item.get("height"), base_url=link)
+
         html_chunks = []
         summary = _entry_get(e, "summary", "") or _entry_get(e, "description", "") or ""
         if summary:
@@ -1568,16 +1597,21 @@ def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int =
                     html_chunks.append(value)
 
         for chunk in html_chunks:
-            for m in re.finditer(r"<img\b[^>]*>", chunk, flags=re.IGNORECASE):
+            chunk_unescaped = html.unescape(chunk)
+            for m in re.finditer(r"<img\b[^>]*>", chunk_unescaped, flags=re.IGNORECASE):
                 tag = m.group(0)
                 src_m = re.search(r"\bsrc=[\"'\"]([^\"'\"]+)[\"'\"]", tag, flags=re.IGNORECASE)
+                if not src_m:
+                    src_m = re.search(r"\bsrc=([^ >]+)", tag, flags=re.IGNORECASE)
+                if not src_m:
+                    src_m = re.search(r"\bdata-src=[\"'\"]([^\"'\"]+)[\"'\"]", tag, flags=re.IGNORECASE)
                 if not src_m:
                     continue
                 width_m = re.search(r"\bwidth=[\"'\"]?(\d+)", tag, flags=re.IGNORECASE)
                 height_m = re.search(r"\bheight=[\"'\"]?(\d+)", tag, flags=re.IGNORECASE)
                 consider(
                     src_m.group(1),
-                    priority=300,
+                    priority=200,
                     width=width_m.group(1) if width_m else None,
                     height=height_m.group(1) if height_m else None,
                     base_url=link,
@@ -1589,12 +1623,6 @@ def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int =
         og_image = _extract_og_image(link)
         if og_image:
             return og_image
-
-        media_thumbnail = _entry_get(e, "media_thumbnail", []) or []
-        for item in media_thumbnail:
-            if not isinstance(item, dict):
-                continue
-            consider(item.get("url") or "", priority=100, width=item.get("width"), height=item.get("height"), base_url=link)
 
         if best_url:
             return best_url
