@@ -410,6 +410,8 @@ DEFAULT_CLIENT = {
 
     "autopost_enabled": False,
     "rss_autopost_enabled": False,
+    "rss_paused": False,
+    "rss_pause_started_at": None,
     "creative_autopost_enabled": False,
     "interval_minutes": 30,
     "rss_use_interval": False,
@@ -469,6 +471,8 @@ DEFAULT_CLIENT = {
 
 CHANNEL_SCOPED_KEYS = (
     "rss_autopost_enabled",
+    "rss_paused",
+    "rss_pause_started_at",
     "creative_autopost_enabled",
     "rss_prompt",
     "creative_prompt",
@@ -730,6 +734,18 @@ def set_mode_autopost_enabled(cfg: dict, mode: str, enabled: bool) -> None:
         cfg["rss_autopost_enabled"] = bool(enabled)
         cfg["creative_autopost_enabled"] = bool(enabled)
     cfg["autopost_enabled"] = mode_autopost_enabled(cfg, "rss") or mode_autopost_enabled(cfg, "creative")
+
+
+def rss_posting_paused(cfg: dict) -> bool:
+    return bool(cfg.get("rss_paused", False))
+
+
+def set_rss_posting_paused(cfg: dict, paused: bool) -> None:
+    cfg["rss_paused"] = bool(paused)
+    if paused:
+        cfg["rss_pause_started_at"] = datetime.now(timezone.utc).isoformat()
+    else:
+        cfg["rss_pause_started_at"] = None
 
 # ===================== Utility =====================
 def is_admin(user_id: int) -> bool:
@@ -2378,7 +2394,7 @@ def build_creative_post_types_submenu(cfg: dict) -> InlineKeyboardMarkup:
 
 
 def build_rss_submenu(cfg: dict) -> InlineKeyboardMarkup:
-    return build_rss_ai_menu(ui_pack(cfg))
+    return build_rss_ai_menu(ui_pack(cfg), rss_posting_paused(cfg))
 
 
 def build_rss_output_submenu(cfg: dict) -> InlineKeyboardMarkup:
@@ -3971,6 +3987,39 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
         await q.answer()
         text = ui_text(cfg, "rss_menu_title") + "\n\n" + selected_channel_text(cfg, selected)
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_rss_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_rss_submenu(cfg))
+        return
+
+    if data in ("ui:rss:pause_posting", "ui:rss:resume_posting"):
+        if not await enforce_mode_paywall(update, cfg, "rss"):
+            return
+        selected, state = require_channel_context(cfg, context, "rss_menu")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "rss_menu", "ui:modes"),
+            )
+            return
+        pause_requested = data == "ui:rss:pause_posting"
+        set_rss_posting_paused(cfg, pause_requested)
+        save_client(user_id, cfg)
+        await q.answer(ui_text(cfg, "rss_posting_paused_short") if pause_requested else ui_text(cfg, "rss_posting_resumed_short"))
+        notice_key = "rss_posting_paused_notice" if pause_requested else "rss_posting_resumed_notice"
+        text = (
+            ui_text(cfg, "rss_menu_title")
+            + "\n\n"
+            + selected_channel_text(cfg, selected)
+            + "\n\n"
+            + ui_text(cfg, notice_key)
+        )
         try:
             await q.edit_message_text(text=text, reply_markup=build_rss_submenu(cfg))
         except BadRequest:
@@ -6464,6 +6513,7 @@ async def autopost_loop(app: Application) -> None:
 
                     best = pick_newest_unseen(cfg) if feeds else None
                     rss_enabled = mode_autopost_enabled(cfg, "rss")
+                    rss_paused = rss_posting_paused(cfg)
                     creative_enabled = mode_autopost_enabled(cfg, "creative")
 
                     if mode == "both" and not best:
@@ -6482,7 +6532,7 @@ async def autopost_loop(app: Application) -> None:
                         last_post_at[(user_id, channel, "creative")] = now
                         continue
 
-                    if mode == "both" and best and not rss_enabled:
+                    if mode == "both" and best and (not rss_enabled or rss_paused):
                         if not creative_enabled:
                             continue
                         if not should_run_mode_now(cfg, "creative", now, last_post_at, user_id, channel):
@@ -6502,6 +6552,8 @@ async def autopost_loop(app: Application) -> None:
                         continue
 
                     if not rss_enabled:
+                        continue
+                    if rss_paused:
                         continue
                     if not should_run_mode_now(cfg, "rss", now, last_post_at, user_id, channel):
                         continue

@@ -124,7 +124,9 @@ def build_creative_post_types_menu(labels: dict, selected_types: list[str]) -> I
     return InlineKeyboardMarkup(rows)
 
 
-def build_rss_ai_menu(labels: dict) -> InlineKeyboardMarkup:
+def build_rss_ai_menu(labels: dict, rss_paused: bool = False) -> InlineKeyboardMarkup:
+    pause_resume_label = labels["btn_resume_posting"] if rss_paused else labels["btn_pause_posting"]
+    pause_resume_callback = "ui:rss:resume_posting" if rss_paused else "ui:rss:pause_posting"
     return InlineKeyboardMarkup(
         [
             [
@@ -139,6 +141,7 @@ def build_rss_ai_menu(labels: dict) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(labels["btn_rss_output_settings"], callback_data="ui:rss:output"),
                 InlineKeyboardButton(labels["btn_scheduling"], callback_data="ui:schedule:rss:menu"),
             ],
+            [InlineKeyboardButton(pause_resume_label, callback_data=pause_resume_callback)],
             [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:rss:preview")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:modes")],
         ]
