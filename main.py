@@ -1086,13 +1086,25 @@ def _feed_auto_fail_message(cfg: dict, user_id: int, reason: str | None) -> str:
         return ui_text(cfg, "feed_x_profile_only")
     message = ui_text(cfg, "feed_auto_failed")
     if is_admin(user_id) and reason:
-        return f"{message}\n\nAuto feed failed at: {reason}"
+        return f"{message}\n\nX transform failed: {reason}"
     return message
 
 
 def _create_x_profile_feed(normalized_x_url: str, username: str) -> tuple[str | None, str]:
     last_reason = "fallback_provider_failed"
     if FEED_CREATION_ENDPOINT:
+        endpoint_candidate, _ = _resolve_x_fallback_provider_url(FEED_CREATION_ENDPOINT, normalized_x_url, username)
+        if endpoint_candidate:
+            valid, invalid_reason = _validate_candidate_feed_url(endpoint_candidate)
+            if valid:
+                logger.info(
+                    "X feed provider success: provider=primary_endpoint_base source=%s candidate=%s",
+                    normalized_x_url,
+                    endpoint_candidate,
+                )
+                return endpoint_candidate, ""
+            last_reason = invalid_reason
+
         candidate, reason = _create_feed_via_external_service(FEED_CREATION_ENDPOINT, normalized_x_url)
         if candidate:
             valid, invalid_reason = _validate_candidate_feed_url(candidate)
@@ -1100,7 +1112,7 @@ def _create_x_profile_feed(normalized_x_url: str, username: str) -> tuple[str | 
                 logger.info("X feed provider success: provider=primary_endpoint source=%s candidate=%s", normalized_x_url, candidate)
                 return candidate, ""
             last_reason = invalid_reason
-        elif reason:
+        elif reason and last_reason == "fallback_provider_failed":
             last_reason = reason
     else:
         last_reason = "primary_endpoint_missing"
