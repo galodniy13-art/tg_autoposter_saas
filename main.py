@@ -134,6 +134,7 @@ OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com/v1").st
 OPENAI_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-chat").strip()
 FEED_CREATION_ENDPOINT = os.getenv("FEED_CREATION_ENDPOINT", "").strip()
+X_RSS_FALLBACKS = os.getenv("X_RSS_FALLBACKS", "").strip()
 
 DEFAULT_STYLE_FILE = "default_ru.txt"
 CREATIVE_POST_TYPES = ["educational", "opinion", "story", "checklist", "question", "myth_vs_fact", "mini_case"]
@@ -927,31 +928,81 @@ def _looks_like_direct_feed_url(url: str) -> bool:
 
 
 def _is_x_profile_url(url: str) -> bool:
-    normalized, username = _normalize_x_profile_url(url)
+    normalized, username, _ = _normalize_x_profile_url(url)
     return bool(normalized and username)
 
 
-def _normalize_x_profile_url(url: str) -> tuple[str | None, str | None]:
+def _normalize_x_profile_url(url: str) -> tuple[str | None, str | None, str | None]:
     try:
         parsed = urlsplit((url or "").strip())
     except Exception:
-        return None, None
+        return None, None, "invalid_x_profile_url"
     host = (parsed.netloc or "").lower()
     if host.startswith("www."):
         host = host[4:]
     if host not in {"x.com", "twitter.com", "mobile.twitter.com", "mobile.x.com"}:
-        return None, None
+        return None, None, "invalid_x_profile_url"
     path = (parsed.path or "").strip("/")
     if not path:
-        return None, None
+        return None, None, "username_parse_failed"
     parts = [part for part in path.split("/") if part]
+    if len(parts) >= 3 and parts[1].lower() == "status":
+        return None, None, "x_status_url_not_supported"
     if len(parts) != 1:
-        return None, None
+        return None, None, "username_parse_failed"
     username = parts[0]
     if not re.fullmatch(r"[A-Za-z0-9_]{1,15}", username):
-        return None, None
+        return None, None, "username_parse_failed"
     normalized = f"https://x.com/{username}"
-    return normalized, username
+    return normalized, username, None
+
+
+def _candidate_is_valid_http_url(url: str) -> bool:
+    parsed = urlsplit((url or "").strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _looks_like_html_response(content_type: str, body: str) -> bool:
+    ct = (content_type or "").lower()
+    prefix = (body or "").lstrip()[:256].lower()
+    return "text/html" in ct or prefix.startswith("<!doctype html") or prefix.startswith("<html")
+
+
+def _validate_candidate_feed_url(candidate: str) -> tuple[bool, str]:
+    if not _candidate_is_valid_http_url(candidate):
+        return False, "candidate_feed_invalid"
+    try:
+        resp = requests.get(candidate, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+    except Exception:
+        return False, "candidate_feed_invalid"
+    parsed = feedparser.parse(resp.content)
+    if _looks_like_html_response(resp.headers.get("Content-Type", ""), resp.text) and not _feed_has_entries(parsed):
+        return False, "candidate_feed_invalid"
+    if not _feed_has_entries(parsed):
+        return False, "candidate_feed_empty"
+    return True, ""
+
+
+def _resolve_x_fallback_provider_url(provider: str, normalized_x_url: str, username: str) -> tuple[str | None, str]:
+    base = (provider or "").strip()
+    if not base:
+        return None, ""
+    if "{username}" in base or "{url}" in base:
+        return base.replace("{username}", username).replace("{url}", normalized_x_url), base
+    if _candidate_is_valid_http_url(base):
+        if base.endswith("/"):
+            return f"{base}{username}", base
+        return f"{base}/{username}", base
+    return None, base
+
+
+def _built_in_x_fallbacks() -> list[str]:
+    return [
+        "https://rsshub.app/twitter/user/{username}",
+        "https://nitter.poast.org/{username}/rss",
+        "https://nitter.net/{username}/rss",
+    ]
 
 
 def _feed_has_entries(feed_data) -> bool:
@@ -996,28 +1047,22 @@ def _find_native_feed_from_site(url: str) -> str | None:
     return None
 
 
-def _create_feed_via_external_service(url: str) -> str | None:
-    if not FEED_CREATION_ENDPOINT:
-        logger.warning("Feed creation endpoint is not configured")
-        return None
+def _create_feed_via_external_service(endpoint: str, source_url: str) -> tuple[str | None, str | None]:
+    if not endpoint:
+        return None, "primary_endpoint_missing"
     try:
-        logger.info("Calling feed creation service for url=%s", url)
-        resp = requests.get(FEED_CREATION_ENDPOINT, params={"url": url}, timeout=20)
+        logger.info("Calling feed creation service endpoint=%s source_url=%s", endpoint, source_url)
+        resp = requests.get(endpoint, params={"url": source_url}, timeout=20)
         resp.raise_for_status()
         data = resp.json() if "application/json" in (resp.headers.get("Content-Type") or "").lower() else {}
     except Exception as exc:
-        logger.warning("Feed creation request failed for url=%s: %s", url, exc)
-        return None
+        logger.warning("Feed creation request failed endpoint=%s source_url=%s: %s", endpoint, source_url, exc)
+        return None, "primary_provider_failed"
     candidate = _extract_feed_url_from_response(data)
     if not candidate:
-        logger.info("Feed creation response did not contain feed url for url=%s", url)
-        return None
-    parsed_candidate = urlsplit(candidate)
-    if parsed_candidate.scheme not in {"http", "https"} or not parsed_candidate.netloc:
-        logger.info("Feed creation response returned invalid url=%s for source=%s", candidate, url)
-        return None
-    logger.info("Feed creation produced candidate=%s for source=%s", candidate, url)
-    return candidate
+        logger.info("Feed creation response did not contain feed url for source_url=%s", source_url)
+        return None, "primary_provider_failed"
+    return candidate, None
 
 
 def _extract_feed_url_from_response(data) -> str | None:
@@ -1036,33 +1081,67 @@ def _extract_feed_url_from_response(data) -> str | None:
     return None
 
 
-def resolve_feed_input_url(raw_url: str) -> tuple[str | None, str]:
+def _feed_auto_fail_message(cfg: dict, user_id: int, reason: str | None) -> str:
+    if reason == "x_status_url_not_supported":
+        return ui_text(cfg, "feed_x_profile_only")
+    message = ui_text(cfg, "feed_auto_failed")
+    if is_admin(user_id) and reason:
+        return f"{message}\n\nAuto feed failed at: {reason}"
+    return message
+
+
+def _create_x_profile_feed(normalized_x_url: str, username: str) -> tuple[str | None, str]:
+    last_reason = "fallback_provider_failed"
+    if FEED_CREATION_ENDPOINT:
+        candidate, reason = _create_feed_via_external_service(FEED_CREATION_ENDPOINT, normalized_x_url)
+        if candidate:
+            valid, invalid_reason = _validate_candidate_feed_url(candidate)
+            if valid:
+                logger.info("X feed provider success: provider=primary_endpoint source=%s candidate=%s", normalized_x_url, candidate)
+                return candidate, ""
+            last_reason = invalid_reason
+        elif reason:
+            last_reason = reason
+    else:
+        last_reason = "primary_endpoint_missing"
+
+    fallback_sources = [item.strip() for item in X_RSS_FALLBACKS.split(",") if item.strip()] if X_RSS_FALLBACKS else _built_in_x_fallbacks()
+    for provider in fallback_sources:
+        fallback_url, provider_name = _resolve_x_fallback_provider_url(provider, normalized_x_url, username)
+        if not fallback_url:
+            last_reason = "fallback_provider_failed"
+            continue
+        valid, reason = _validate_candidate_feed_url(fallback_url)
+        if valid:
+            logger.info("X feed provider success: provider=%s source=%s candidate=%s", provider_name, normalized_x_url, fallback_url)
+            return fallback_url, ""
+        last_reason = reason if reason.startswith("candidate_feed_") else "fallback_provider_failed"
+    return None, last_reason
+
+
+def resolve_feed_input_url(raw_url: str) -> tuple[str | None, str, str | None, bool]:
     url = (raw_url or "").strip()
     if not url:
-        return None, "invalid"
+        return None, "invalid", "invalid_x_profile_url", False
 
     direct = feedparser.parse(url)
     if _feed_has_entries(direct):
-        return url, "direct"
+        return url, "direct", None, False
 
     if _looks_like_direct_feed_url(url):
-        return None, "invalid"
+        return None, "invalid", None, False
 
-    normalized_x_url, x_username = _normalize_x_profile_url(url)
+    normalized_x_url, x_username, normalize_reason = _normalize_x_profile_url(url)
     if not normalized_x_url:
-        return None, "failed"
+        return None, "failed", normalize_reason or "invalid_x_profile_url", True
     logger.info("Normalized X profile url: source=%s normalized=%s username=%s", url, normalized_x_url, x_username)
 
-    created = _create_feed_via_external_service(normalized_x_url)
+    created, reason = _create_x_profile_feed(normalized_x_url, x_username)
     if created:
-        created_fp = feedparser.parse(created)
-        if _feed_has_entries(created_fp):
-            return created, "created"
-        logger.info("Created feed has no entries: source=%s created=%s", normalized_x_url, created)
-    else:
-        logger.info("Feed creation returned empty result for source=%s", normalized_x_url)
+        return created, "created", None, True
 
-    return None, "failed"
+    logger.info("X profile feed creation failed: source=%s reason=%s", normalized_x_url, reason)
+    return None, "failed", reason or "fallback_provider_failed", True
 
 # ===================== RSS helpers =====================
 def _entry_time_struct(entry):
@@ -6035,18 +6114,22 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         feeds = cfg.get("feeds", [])
         limit = feed_limit_per_channel(cfg)
         if _find_feed_by_url(feeds, url):
+            logger.info("Feed add failed: stage=duplicate_feed user_id=%s url=%s", user_id, url)
             context.user_data.pop("awaiting_feed_add", None)
             await send_menu(update, cfg, ui_text(cfg, "feed_duplicate"))
             return
         if len(feeds) >= limit:
+            logger.info("Feed add failed: stage=feed_limit_reached user_id=%s limit=%s", user_id, limit)
             context.user_data.pop("awaiting_feed_add", None)
             await send_menu(update, cfg, ui_text(cfg, "feed_limit_reached").format(limit=limit))
             return
-        feed_url, status = resolve_feed_input_url(url)
+        feed_url, status, reason, is_x_attempt = resolve_feed_input_url(url)
         if not feed_url:
             context.user_data.pop("awaiting_feed_add", None)
             if status == "failed":
-                await send_menu(update, cfg, ui_text(cfg, "feed_auto_failed"))
+                if is_x_attempt:
+                    logger.info("Feed add failed: stage=%s user_id=%s source=x_profile", reason or "fallback_provider_failed", user_id)
+                await send_menu(update, cfg, _feed_auto_fail_message(cfg, user_id, reason))
             else:
                 await send_menu(update, cfg, ui_text(cfg, "feed_read_failed"))
             return
@@ -6149,16 +6232,20 @@ async def addfeed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     limit = feed_limit_per_channel(cfg)
 
     if _find_feed_by_url(feeds, url):
+        logger.info("Feed add failed: stage=duplicate_feed user_id=%s url=%s", user_id, url)
         await update.message.reply_text(ui_text(cfg, "feed_duplicate"))
         return
     if len(feeds) >= limit:
+        logger.info("Feed add failed: stage=feed_limit_reached user_id=%s limit=%s", user_id, limit)
         await update.message.reply_text(ui_text(cfg, "feed_limit_reached").format(limit=limit))
         return
 
-    feed_url, status = resolve_feed_input_url(url)
+    feed_url, status, reason, is_x_attempt = resolve_feed_input_url(url)
     if not feed_url:
         if status == "failed":
-            await update.message.reply_text(ui_text(cfg, "feed_auto_failed"))
+            if is_x_attempt:
+                logger.info("Feed add failed: stage=%s user_id=%s source=x_profile", reason or "fallback_provider_failed", user_id)
+            await update.message.reply_text(_feed_auto_fail_message(cfg, user_id, reason))
         else:
             await update.message.reply_text(ui_text(cfg, "feed_read_failed"))
         return
