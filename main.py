@@ -974,6 +974,9 @@ def _looks_like_html_response(content_type: str, body: str) -> bool:
 def _validate_candidate_feed_url(candidate: str) -> tuple[bool, str]:
     if not _candidate_is_valid_http_url(candidate):
         return False, "candidate_feed_invalid"
+    parsed = feedparser.parse(candidate)
+    if _feed_has_metadata(parsed) and _feed_has_entries(parsed):
+        return True, ""
     try:
         resp = requests.get(candidate, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
@@ -981,6 +984,8 @@ def _validate_candidate_feed_url(candidate: str) -> tuple[bool, str]:
         return False, "candidate_feed_invalid"
     parsed = feedparser.parse(resp.content)
     if _looks_like_html_response(resp.headers.get("Content-Type", ""), resp.text) and not _feed_has_entries(parsed):
+        return False, "candidate_feed_invalid"
+    if not _feed_has_metadata(parsed):
         return False, "candidate_feed_invalid"
     if not _feed_has_entries(parsed):
         return False, "candidate_feed_empty"
@@ -1009,7 +1014,34 @@ def _built_in_x_fallbacks() -> list[str]:
 
 
 def _feed_has_entries(feed_data) -> bool:
-    return bool(getattr(feed_data, "entries", None))
+    entries = getattr(feed_data, "entries", None) or []
+    for entry in entries:
+        if _entry_has_content(entry):
+            return True
+    return False
+
+
+def _feed_has_metadata(feed_data) -> bool:
+    feed_meta = getattr(feed_data, "feed", None) or {}
+    for key in ("title", "subtitle", "link", "id"):
+        value = str(_entry_get(feed_meta, key, "") or "").strip()
+        if value:
+            return True
+    return False
+
+
+def _entry_has_content(entry) -> bool:
+    for key in ("link", "guid", "id", "title", "description", "summary"):
+        value = str(_entry_get(entry, key, "") or "").strip()
+        if value:
+            return True
+    content_items = _entry_get(entry, "content")
+    if isinstance(content_items, list):
+        for item in content_items:
+            value = str(_entry_get(item, "value", "") or "").strip()
+            if value:
+                return True
+    return False
 
 
 def _entry_primary_link(entry) -> str:
