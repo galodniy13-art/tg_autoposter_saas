@@ -175,7 +175,7 @@ TEXTS = {
     "6) Paid posting:\n"
     "   Ask admin to activate, then /fetchonce or /autoposton"
 ),
-"ui_addfeed": "Send a direct RSS URL or a website link.\nI will try to detect/create RSS automatically.\n\n/addfeed [your link]",
+"ui_addfeed": "Send a direct RSS feed URL.\nOr send an X/Twitter profile link — I'll create the RSS feed automatically.\n\n/addfeed [your link]",
 "ui_setchannel": "Add the bot to your channel as an admin, then forward one message from that channel here.\nI will use that forwarded message to connect the channel.",
 "ui_setstyle": "Paste your style prompt like:\n/setstyle <your text>\n\nExample: language, tone, length, emojis, forbidden topics.",
 "ui_pay": "Payment / activation:\n{pay}",
@@ -251,7 +251,7 @@ TEXTS = {
     "6) Публикации (платно):\n"
     "   Активация админом, потом /fetchonce или /autoposton"
 ),
-"ui_addfeed": "Отправьте прямую RSS-ссылку или обычную ссылку на сайт.\nЯ попробую автоматически найти/создать RSS.\n\n/addfeed [ваша ссылка]",
+"ui_addfeed": "Отправьте прямую RSS-ссылку.\nИли отправьте ссылку на профиль X/Twitter — я создам RSS автоматически.\n\n/addfeed [ваша ссылка]",
 "ui_setchannel": "Добавьте бота в канал как администратора, а затем перешлите сюда одно сообщение из этого канала.\nЯ использую это пересланное сообщение, чтобы подключить канал.",
 "ui_setstyle": "Вставьте prompt стиля так:\n/setstyle <ваш текст>\n\nПример: язык, тон, длина, эмодзи, запреты.",
 "ui_pay": "Оплата / активация:\n{pay}",
@@ -926,6 +926,28 @@ def _looks_like_direct_feed_url(url: str) -> bool:
     return bool(re.search(r"(rss|atom|feed|\.xml)(?:$|[/?#])", raw))
 
 
+def _is_x_profile_url(url: str) -> bool:
+    try:
+        parsed = urlsplit((url or "").strip())
+    except Exception:
+        return False
+    host = (parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host not in {"x.com", "twitter.com", "mobile.twitter.com"}:
+        return False
+    path = (parsed.path or "").strip("/")
+    if not path:
+        return False
+    parts = [part for part in path.split("/") if part]
+    if len(parts) != 1:
+        return False
+    username = parts[0]
+    if not re.fullmatch(r"[A-Za-z0-9_]{1,15}", username):
+        return False
+    return True
+
+
 def _feed_has_entries(feed_data) -> bool:
     return bool(getattr(feed_data, "entries", None))
 
@@ -998,9 +1020,8 @@ def resolve_feed_input_url(raw_url: str) -> tuple[str | None, str]:
     if _looks_like_direct_feed_url(url):
         return None, "invalid"
 
-    native = _find_native_feed_from_site(url)
-    if native:
-        return native, "detected"
+    if not _is_x_profile_url(url):
+        return None, "failed"
 
     created = _create_feed_via_external_service(url)
     if created:
