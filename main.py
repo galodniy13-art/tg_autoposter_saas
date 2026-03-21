@@ -133,6 +133,7 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct").strip()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com/v1").strip()
 OPENAI_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "deepseek-chat").strip()
+FEED_CREATION_ENDPOINT = os.getenv("FEED_CREATION_ENDPOINT", "").strip()
 
 DEFAULT_STYLE_FILE = "default_ru.txt"
 CREATIVE_POST_TYPES = ["educational", "opinion", "story", "checklist", "question", "myth_vs_fact", "mini_case"]
@@ -174,7 +175,7 @@ TEXTS = {
     "6) Paid posting:\n"
     "   Ask admin to activate, then /fetchonce or /autoposton"
 ),
-"ui_addfeed": "Paste your RSS link like:\n/addfeed [your link]",
+"ui_addfeed": "Send a direct RSS URL or a website link.\nI will try to detect/create RSS automatically.\n\n/addfeed [your link]",
 "ui_setchannel": "Add the bot to your channel as an admin, then forward one message from that channel here.\nI will use that forwarded message to connect the channel.",
 "ui_setstyle": "Paste your style prompt like:\n/setstyle <your text>\n\nExample: language, tone, length, emojis, forbidden topics.",
 "ui_pay": "Payment / activation:\n{pay}",
@@ -250,7 +251,7 @@ TEXTS = {
     "6) Публикации (платно):\n"
     "   Активация админом, потом /fetchonce или /autoposton"
 ),
-"ui_addfeed": "Вставьте RSS ссылку так:\n/addfeed [ваша ссылка]",
+"ui_addfeed": "Отправьте прямую RSS-ссылку или обычную ссылку на сайт.\nЯ попробую автоматически найти/создать RSS.\n\n/addfeed [ваша ссылка]",
 "ui_setchannel": "Добавьте бота в канал как администратора, а затем перешлите сюда одно сообщение из этого канала.\nЯ использую это пересланное сообщение, чтобы подключить канал.",
 "ui_setstyle": "Вставьте prompt стиля так:\n/setstyle <ваш текст>\n\nПример: язык, тон, длина, эмодзи, запреты.",
 "ui_pay": "Оплата / активация:\n{pay}",
@@ -382,6 +383,7 @@ DEFAULT_CLIENT = {
     "channel_labels": {},
     "channel_meta": {},
     "channel_slots": 0,
+    "feed_limit_per_channel": 2,
     "feeds": [],
     "posted_urls": [],
     "posted_story_fingerprints": [],
@@ -476,6 +478,7 @@ CHANNEL_SCOPED_KEYS = (
     "creative_autopost_enabled",
     "rss_prompt",
     "creative_prompt",
+    "feed_limit_per_channel",
     "feeds",
     "posted_urls",
     "posted_story_fingerprints",
@@ -907,6 +910,105 @@ def _feed_name(feed_entry) -> str:
 def _find_feed_by_url(feeds: list, url: str) -> bool:
     target = (url or "").strip()
     return any(_feed_url(item) == target for item in feeds)
+
+
+def feed_limit_per_channel(cfg: dict) -> int:
+    raw = cfg.get("feed_limit_per_channel", 2)
+    try:
+        limit = int(raw)
+    except (TypeError, ValueError):
+        limit = 2
+    return max(1, limit)
+
+
+def _looks_like_direct_feed_url(url: str) -> bool:
+    raw = (url or "").strip().lower()
+    return bool(re.search(r"(rss|atom|feed|\.xml)(?:$|[/?#])", raw))
+
+
+def _feed_has_entries(feed_data) -> bool:
+    return bool(getattr(feed_data, "entries", None))
+
+
+def _find_native_feed_from_site(url: str) -> str | None:
+    try:
+        resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        html = resp.text or ""
+    except Exception:
+        return None
+
+    candidates: list[str] = []
+    for match in re.finditer(
+        r'<link[^>]+rel=["\'][^"\']*alternate[^"\']*["\'][^>]*>',
+        html,
+        flags=re.IGNORECASE,
+    ):
+        tag = match.group(0)
+        if not re.search(r'type=["\'](?:application|text)/(?:rss\+xml|atom\+xml|xml)["\']', tag, flags=re.IGNORECASE):
+            continue
+        href_match = re.search(r'href=["\']([^"\']+)["\']', tag, flags=re.IGNORECASE)
+        if href_match:
+            candidates.append(urljoin(url, href_match.group(1).strip()))
+
+    for fallback in ("/feed", "/rss", "/rss.xml", "/feed.xml", "/atom.xml"):
+        candidates.append(urljoin(url, fallback))
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            parsed = feedparser.parse(candidate)
+        except Exception:
+            continue
+        if _feed_has_entries(parsed):
+            return candidate
+    return None
+
+
+def _create_feed_via_external_service(url: str) -> str | None:
+    if not FEED_CREATION_ENDPOINT:
+        return None
+    try:
+        resp = requests.get(FEED_CREATION_ENDPOINT, params={"url": url}, timeout=20)
+        resp.raise_for_status()
+        data = resp.json() if "application/json" in (resp.headers.get("Content-Type") or "").lower() else {}
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    for key in ("feed_url", "rss_url", "url"):
+        candidate = str(data.get(key) or "").strip()
+        if candidate:
+            return candidate
+    return None
+
+
+def resolve_feed_input_url(raw_url: str) -> tuple[str | None, str]:
+    url = (raw_url or "").strip()
+    if not url:
+        return None, "invalid"
+
+    direct = feedparser.parse(url)
+    if _feed_has_entries(direct):
+        return url, "direct"
+
+    if _looks_like_direct_feed_url(url):
+        return None, "invalid"
+
+    native = _find_native_feed_from_site(url)
+    if native:
+        return native, "detected"
+
+    created = _create_feed_via_external_service(url)
+    if created:
+        created_fp = feedparser.parse(created)
+        if _feed_has_entries(created_fp):
+            return created, "created"
+
+    return None, "failed"
 
 # ===================== RSS helpers =====================
 def _entry_time_struct(entry):
@@ -3053,12 +3155,15 @@ def feeds_overview(cfg: dict) -> str:
 
 
 def feed_management_text(cfg: dict, selected_channel: str) -> str:
+    limit = feed_limit_per_channel(cfg)
     return (
         selected_channel_text(cfg, selected_channel)
         + "\n\n"
         + ui_text(cfg, "feed_management_title")
         + "\n"
         + ui_text(cfg, "feed_management_help")
+        + "\n"
+        + ui_text(cfg, "feed_limit_status").format(count=len(cfg.get("feeds", [])), limit=limit)
         + "\n\n"
         + feeds_overview(cfg)
     )
@@ -5829,6 +5934,13 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 return
             feed_name = "" if text == "-" else text
             feeds = cfg.get("feeds", [])
+            if _find_feed_by_url(feeds, url):
+                await send_menu(update, cfg, ui_text(cfg, "feed_duplicate"))
+                return
+            limit = feed_limit_per_channel(cfg)
+            if len(feeds) >= limit:
+                await send_menu(update, cfg, ui_text(cfg, "feed_limit_reached").format(limit=limit))
+                return
             feeds.append({"url": url, "name": feed_name} if feed_name else url)
             cfg["feeds"] = feeds
             save_client(user_id, cfg)
@@ -5845,16 +5957,24 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["awaiting_feed_add"] = "name"
         url = text.strip()
         feeds = cfg.get("feeds", [])
+        limit = feed_limit_per_channel(cfg)
         if _find_feed_by_url(feeds, url):
             context.user_data.pop("awaiting_feed_add", None)
-            await send_menu(update, cfg, "Already added.")
+            await send_menu(update, cfg, ui_text(cfg, "feed_duplicate"))
             return
-        fp = feedparser.parse(url)
-        if not getattr(fp, "entries", None):
+        if len(feeds) >= limit:
             context.user_data.pop("awaiting_feed_add", None)
-            await send_menu(update, cfg, "Feed read failed (no entries). Check the URL.")
+            await send_menu(update, cfg, ui_text(cfg, "feed_limit_reached").format(limit=limit))
             return
-        context.user_data["pending_feed_url"] = url
+        feed_url, status = resolve_feed_input_url(url)
+        if not feed_url:
+            context.user_data.pop("awaiting_feed_add", None)
+            if status == "failed":
+                await send_menu(update, cfg, ui_text(cfg, "feed_auto_failed"))
+            else:
+                await send_menu(update, cfg, ui_text(cfg, "feed_read_failed"))
+            return
+        context.user_data["pending_feed_url"] = feed_url
         await update.message.reply_text(ui_text(cfg, "feed_name_prompt"))
         return
 
@@ -5950,18 +6070,25 @@ async def addfeed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     url = context.args[0].strip()
     feeds = cfg.get("feeds", [])
+    limit = feed_limit_per_channel(cfg)
 
     if _find_feed_by_url(feeds, url):
-        await update.message.reply_text("Already added.")
+        await update.message.reply_text(ui_text(cfg, "feed_duplicate"))
+        return
+    if len(feeds) >= limit:
+        await update.message.reply_text(ui_text(cfg, "feed_limit_reached").format(limit=limit))
         return
 
-    fp = feedparser.parse(url)
-    if not getattr(fp, "entries", None):
-        await update.message.reply_text("Feed read failed (no entries). Check the URL.")
+    feed_url, status = resolve_feed_input_url(url)
+    if not feed_url:
+        if status == "failed":
+            await update.message.reply_text(ui_text(cfg, "feed_auto_failed"))
+        else:
+            await update.message.reply_text(ui_text(cfg, "feed_read_failed"))
         return
 
     context.user_data["awaiting_feed_add"] = "name"
-    context.user_data["pending_feed_url"] = url
+    context.user_data["pending_feed_url"] = feed_url
     await update.message.reply_text(ui_text(cfg, "feed_name_prompt"))
 
 async def feeds_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -6427,6 +6554,38 @@ async def setchannels_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
 
+async def setfeedlimit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    caller = update.effective_user.id
+    if not is_admin(caller):
+        await update.message.reply_text(tr(load_client(caller), "admin_only"))
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text("Usage: /setfeedlimit <user_id> <count>")
+        return
+
+    uid_raw, count_raw = context.args[0].strip(), context.args[1].strip()
+    if not uid_raw.isdigit() or not count_raw.isdigit():
+        await update.message.reply_text("Usage: /setfeedlimit <user_id> <count>")
+        return
+
+    uid = int(uid_raw)
+    count = int(count_raw)
+    if count < 1 or count > 100:
+        await update.message.reply_text("count range: 1..100")
+        return
+
+    cfg = load_client(uid)
+    cfg["feed_limit_per_channel"] = count
+    channel_settings = cfg.get("channel_settings")
+    if isinstance(channel_settings, dict):
+        for channel_key, bucket in channel_settings.items():
+            if isinstance(channel_key, str) and isinstance(bucket, dict):
+                bucket["feed_limit_per_channel"] = count
+    save_client(uid, cfg)
+    await update.message.reply_text(f"✅ User {uid} feed_limit_per_channel set to {count}")
+
+
 async def setinterval_admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     caller = update.effective_user.id
     if not is_admin(caller):
@@ -6687,6 +6846,7 @@ def main() -> None:
     app.add_handler(CommandHandler("deactivate", deactivate_cmd))
     app.add_handler(CommandHandler("setlimit", setlimit_cmd))
     app.add_handler(CommandHandler("setchannels", setchannels_cmd))
+    app.add_handler(CommandHandler("setfeedlimit", setfeedlimit_cmd))
     app.add_handler(CommandHandler("setinterval", setinterval_admin_cmd))
 
     app.add_handler(
