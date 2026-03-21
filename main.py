@@ -938,6 +938,8 @@ def _normalize_x_profile_url(url: str) -> tuple[str | None, str | None, str | No
         parsed = urlsplit((url or "").strip())
     except Exception:
         return None, None, "invalid_x_profile_url"
+    if parsed.scheme and parsed.scheme.lower() not in {"http", "https"}:
+        return None, None, "invalid_x_profile_url"
     host = (parsed.netloc or "").lower()
     if host.startswith("www."):
         host = host[4:]
@@ -947,7 +949,7 @@ def _normalize_x_profile_url(url: str) -> tuple[str | None, str | None, str | No
     if not path:
         return None, None, "username_parse_failed"
     parts = [part for part in path.split("/") if part]
-    if len(parts) >= 3 and parts[1].lower() == "status":
+    if len(parts) >= 2 and parts[1].lower() == "status":
         return None, None, "x_status_url_not_supported"
     if len(parts) != 1:
         return None, None, "username_parse_failed"
@@ -1008,6 +1010,15 @@ def _built_in_x_fallbacks() -> list[str]:
 
 def _feed_has_entries(feed_data) -> bool:
     return bool(getattr(feed_data, "entries", None))
+
+
+def _entry_primary_link(entry) -> str:
+    return str(
+        _entry_get(entry, "link", "")
+        or _entry_get(entry, "guid", "")
+        or _entry_get(entry, "id", "")
+        or ""
+    ).strip()
 
 
 def _find_native_feed_from_site(url: str) -> str | None:
@@ -1096,6 +1107,8 @@ def _create_x_profile_feed(normalized_x_url: str, username: str) -> tuple[str | 
     if FEED_CREATION_ENDPOINT:
         endpoint_candidate, _ = _resolve_x_fallback_provider_url(FEED_CREATION_ENDPOINT, normalized_x_url, username)
         if endpoint_candidate:
+            logger.info("X transform username parsed: %s", username)
+            logger.info("X transform rsshub candidate: %s", endpoint_candidate)
             valid, invalid_reason = _validate_candidate_feed_url(endpoint_candidate)
             if valid:
                 logger.info(
@@ -1105,16 +1118,9 @@ def _create_x_profile_feed(normalized_x_url: str, username: str) -> tuple[str | 
                 )
                 return endpoint_candidate, ""
             last_reason = invalid_reason
-
-        candidate, reason = _create_feed_via_external_service(FEED_CREATION_ENDPOINT, normalized_x_url)
-        if candidate:
-            valid, invalid_reason = _validate_candidate_feed_url(candidate)
-            if valid:
-                logger.info("X feed provider success: provider=primary_endpoint source=%s candidate=%s", normalized_x_url, candidate)
-                return candidate, ""
-            last_reason = invalid_reason
-        elif reason and last_reason == "fallback_provider_failed":
-            last_reason = reason
+            logger.info("X transform rsshub candidate validation failed: %s", invalid_reason or "candidate_feed_invalid")
+        else:
+            last_reason = "primary_endpoint_missing"
     else:
         last_reason = "primary_endpoint_missing"
 
@@ -1292,7 +1298,7 @@ def pick_newest_unseen(cfg: dict):
         fp = feedparser.parse(feed_url)
         entries = getattr(fp, "entries", []) or []
         for e in entries[:per_feed]:
-            link = getattr(e, "link", None)
+            link = _entry_primary_link(e)
             if not link:
                 continue
             link_n = normalize_url(link)
@@ -1334,11 +1340,11 @@ def extract_summary_for_link(feed_url: str, link_normalized: str, limit: int = 2
     fp = feedparser.parse(feed_url)
     entries = getattr(fp, "entries", []) or []
     for e in entries[:limit]:
-        link = getattr(e, "link", None)
+        link = _entry_primary_link(e)
         if not link:
             continue
         if normalize_url(link) == link_normalized:
-            return clean_text(getattr(e, "summary", "") or getattr(e, "description", "") or "")
+            return clean_text(_entry_get(e, "summary", "") or _entry_get(e, "description", "") or "")
     return ""
 
 
@@ -1346,7 +1352,7 @@ def extract_rss_context_for_link(feed_url: str, link_normalized: str, limit: int
     fp = feedparser.parse(feed_url)
     entries = getattr(fp, "entries", []) or []
     for e in entries[:limit]:
-        link = _entry_get(e, "link")
+        link = _entry_primary_link(e)
         if not link:
             continue
         if normalize_url(link) != link_normalized:
@@ -1541,7 +1547,7 @@ def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int =
     fp = feedparser.parse(feed_url)
     entries = getattr(fp, "entries", []) or []
     for e in entries[:limit]:
-        link = _entry_get(e, "link")
+        link = _entry_primary_link(e)
         if not link or normalize_url(link) != link_normalized:
             continue
 
