@@ -79,12 +79,12 @@ def build_creative_menu(labels: dict) -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(labels["btn_edit_prompt"], callback_data="ui:creative:editprompt")],
             [InlineKeyboardButton(labels["btn_build_prompt_ai"], callback_data="ui:creative:buildprompt")],
+            [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:creative:preview")],
             [InlineKeyboardButton(labels["btn_content_plan"], callback_data="ui:creative:contentplan")],
             [InlineKeyboardButton(labels["btn_source_center"], callback_data="ui:creative:sources")],
             [InlineKeyboardButton(labels["btn_content_variety"], callback_data="ui:creative:variety")],
             [InlineKeyboardButton(labels["btn_visual_support"], callback_data="ui:creative:visual")],
             [InlineKeyboardButton(labels["btn_scheduling"], callback_data="ui:schedule:creative:menu")],
-            [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:creative:preview")],
             [InlineKeyboardButton(labels["btn_copy_my_style"], callback_data="ui:creative:copystyle")],
             [InlineKeyboardButton(labels["btn_post_format"], callback_data="ui:creative:output")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:modes")],

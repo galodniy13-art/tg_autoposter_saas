@@ -3341,6 +3341,18 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
             context.user_data["active_channel_idx"] = channels.index(selected_channel)
             switch_active_channel(cfg, selected_channel)
             return selected_channel, None
+        idx = context.user_data.get("active_channel_idx")
+        if isinstance(idx, int) and 0 <= idx < len(channels):
+            selected_channel = channels[idx]
+            set_mode_channel_selection(context, selected_channel)
+            switch_active_channel(cfg, selected_channel)
+            return selected_channel, None
+        current_channel = cfg.get("channel")
+        if isinstance(current_channel, str) and current_channel in channels:
+            set_mode_channel_selection(context, current_channel)
+            context.user_data["active_channel_idx"] = channels.index(current_channel)
+            switch_active_channel(cfg, current_channel)
+            return current_channel, None
         clear_mode_channel_selection(context)
         return None, "pick"
 
@@ -3852,7 +3864,13 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
         await q.answer()
-        text = ui_text(cfg, "source_center_title") + "\n\n" + selected_channel_text(cfg, selected)
+        text = (
+            ui_text(cfg, "source_center_title")
+            + "\n\n"
+            + selected_channel_text(cfg, selected)
+            + "\n\n"
+            + ui_text(cfg, "source_center_intro")
+        )
         try:
             await q.edit_message_text(text=text, reply_markup=build_creative_source_center_submenu(cfg))
         except BadRequest:
@@ -3957,6 +3975,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             ui_text(cfg, "creative_variety_title")
             + "\n\n"
             + selected_channel_text(cfg, selected)
+            + "\n\n"
+            + ui_text(cfg, "creative_variety_intro")
             + "\n\n"
             + ui_text(cfg, "creative_variety_summary").format(
                 level=ui_text(cfg, "variation_level_value_" + creative_variation_level(cfg)),
