@@ -3331,8 +3331,11 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
         switch_active_channel(cfg, channels[0])
         return channels[0], None
 
+    if action in {"creative_menu", "rss_menu"}:
+        clear_mode_channel_selection(context)
+        return None, "pick"
+
     explicit_selection_actions = {
-        "creative_menu",
         "creative_editprompt",
         "creative_buildprompt",
         "creative_copystyle",
@@ -3347,7 +3350,6 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
         "creative_sources_inspiration_links",
         "creative_sources_source_snippets",
         "creative_preview",
-        "rss_menu",
         "rss_editprompt",
         "rss_buildprompt",
         "rss_copystyle",
