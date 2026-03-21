@@ -927,25 +927,31 @@ def _looks_like_direct_feed_url(url: str) -> bool:
 
 
 def _is_x_profile_url(url: str) -> bool:
+    normalized, username = _normalize_x_profile_url(url)
+    return bool(normalized and username)
+
+
+def _normalize_x_profile_url(url: str) -> tuple[str | None, str | None]:
     try:
         parsed = urlsplit((url or "").strip())
     except Exception:
-        return False
+        return None, None
     host = (parsed.netloc or "").lower()
     if host.startswith("www."):
         host = host[4:]
-    if host not in {"x.com", "twitter.com", "mobile.twitter.com"}:
-        return False
+    if host not in {"x.com", "twitter.com", "mobile.twitter.com", "mobile.x.com"}:
+        return None, None
     path = (parsed.path or "").strip("/")
     if not path:
-        return False
+        return None, None
     parts = [part for part in path.split("/") if part]
     if len(parts) != 1:
-        return False
+        return None, None
     username = parts[0]
     if not re.fullmatch(r"[A-Za-z0-9_]{1,15}", username):
-        return False
-    return True
+        return None, None
+    normalized = f"https://x.com/{username}"
+    return normalized, username
 
 
 def _feed_has_entries(feed_data) -> bool:
@@ -992,19 +998,41 @@ def _find_native_feed_from_site(url: str) -> str | None:
 
 def _create_feed_via_external_service(url: str) -> str | None:
     if not FEED_CREATION_ENDPOINT:
+        logger.warning("Feed creation endpoint is not configured")
         return None
     try:
+        logger.info("Calling feed creation service for url=%s", url)
         resp = requests.get(FEED_CREATION_ENDPOINT, params={"url": url}, timeout=20)
         resp.raise_for_status()
         data = resp.json() if "application/json" in (resp.headers.get("Content-Type") or "").lower() else {}
-    except Exception:
+    except Exception as exc:
+        logger.warning("Feed creation request failed for url=%s: %s", url, exc)
         return None
+    candidate = _extract_feed_url_from_response(data)
+    if not candidate:
+        logger.info("Feed creation response did not contain feed url for url=%s", url)
+        return None
+    parsed_candidate = urlsplit(candidate)
+    if parsed_candidate.scheme not in {"http", "https"} or not parsed_candidate.netloc:
+        logger.info("Feed creation response returned invalid url=%s for source=%s", candidate, url)
+        return None
+    logger.info("Feed creation produced candidate=%s for source=%s", candidate, url)
+    return candidate
+
+
+def _extract_feed_url_from_response(data) -> str | None:
     if not isinstance(data, dict):
         return None
     for key in ("feed_url", "rss_url", "url"):
         candidate = str(data.get(key) or "").strip()
         if candidate:
             return candidate
+    nested = data.get("data")
+    if isinstance(nested, dict):
+        for key in ("feed_url", "rss_url", "url"):
+            candidate = str(nested.get(key) or "").strip()
+            if candidate:
+                return candidate
     return None
 
 
@@ -1020,14 +1048,19 @@ def resolve_feed_input_url(raw_url: str) -> tuple[str | None, str]:
     if _looks_like_direct_feed_url(url):
         return None, "invalid"
 
-    if not _is_x_profile_url(url):
+    normalized_x_url, x_username = _normalize_x_profile_url(url)
+    if not normalized_x_url:
         return None, "failed"
+    logger.info("Normalized X profile url: source=%s normalized=%s username=%s", url, normalized_x_url, x_username)
 
-    created = _create_feed_via_external_service(url)
+    created = _create_feed_via_external_service(normalized_x_url)
     if created:
         created_fp = feedparser.parse(created)
         if _feed_has_entries(created_fp):
             return created, "created"
+        logger.info("Created feed has no entries: source=%s created=%s", normalized_x_url, created)
+    else:
+        logger.info("Feed creation returned empty result for source=%s", normalized_x_url)
 
     return None, "failed"
 
