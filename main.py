@@ -1214,9 +1214,12 @@ def _feed_auto_fail_message(cfg: dict, user_id: int, reason: str | None) -> str:
 def _create_x_profile_feed(normalized_x_url: str, username: str) -> tuple[str | None, str]:
     last_reason = "fallback_provider_failed"
     if FEED_CREATION_ENDPOINT:
-        endpoint_candidate, _ = _resolve_x_fallback_provider_url(FEED_CREATION_ENDPOINT, normalized_x_url, username)
+        endpoint_base = FEED_CREATION_ENDPOINT.rstrip("/")
+        endpoint_candidate = f"{endpoint_base}/twitter/user/{username}"
         if endpoint_candidate:
             logger.info("[X_LINK_DETECTED] username=%s profile=%s", username, normalized_x_url)
+            logger.info("[X_USERNAME] %s", username)
+            logger.info("[X_RSS_URL_FINAL] %s", endpoint_candidate)
             logger.info("[RSSHUB_TRANSFORM] source=%s candidate=%s", normalized_x_url, endpoint_candidate)
             valid, invalid_reason = _validate_candidate_feed_url(endpoint_candidate)
             if valid:
