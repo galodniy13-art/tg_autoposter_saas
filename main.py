@@ -9,6 +9,7 @@ import re
 import threading
 import tempfile
 import time
+from html.parser import HTMLParser
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl, urlencode
@@ -1583,13 +1584,18 @@ def _safe_int(value) -> int | None:
 
 
 def _normalize_image_url(url: str, base_url: str = "") -> str | None:
-    raw = (url or "").strip()
+    raw = html.unescape((url or "").strip())
     if not raw:
         return None
+    if raw.startswith("//"):
+        raw = "https:" + raw
+    raw = re.sub(r"\s+", "", raw)
     full = urljoin(base_url, raw)
+    full = html.unescape(full).strip()
     parsed = urlsplit(full)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         return None
+    logger.info("[IMG_URL_NORMALIZED] raw=%s normalized=%s", (url or "")[:180], full[:240])
     return full
 
 
@@ -1689,7 +1695,72 @@ def _extract_og_image(article_url: str) -> str | None:
     return _normalize_image_url(m.group(1), article_url)
 
 
+class _FirstImageHTMLParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.first_image_url: str | None = None
+
+    def handle_starttag(self, tag, attrs):
+        if self.first_image_url or (tag or "").lower() != "img":
+            return
+        attrs_map = {str(k).lower(): (v or "") for k, v in attrs}
+        candidate = attrs_map.get("src") or attrs_map.get("data-src") or attrs_map.get("data-original") or attrs_map.get("data-lazy-src")
+        if candidate:
+            self.first_image_url = candidate
+
+
+def _extract_first_image_from_html(html_fragment: str, base_url: str = "") -> str | None:
+    if not html_fragment:
+        return None
+    parser = _FirstImageHTMLParser()
+    try:
+        parser.feed(html.unescape(html_fragment))
+    except Exception:
+        return None
+    if not parser.first_image_url:
+        return None
+    return _normalize_image_url(parser.first_image_url, base_url)
+
+
+def _download_image_to_tempfile(image_url: str, marker: str = "normal") -> tuple[Path | None, str | None]:
+    logger.info("[IMG_DOWNLOAD_START] marker=%s url=%s", marker, image_url)
+    try:
+        resp = requests.get(
+            image_url,
+            timeout=20,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; TGAutoPosterBot/1.0)"},
+        )
+        resp.raise_for_status()
+        content_type = (resp.headers.get("Content-Type") or "").lower()
+        raw = io.BytesIO(resp.content)
+        img = Image.open(raw)
+        img.load()
+        fmt = (img.format or "").upper()
+        out_ext = ".jpg"
+        save_format = "JPEG"
+        if fmt == "PNG":
+            out_ext = ".png"
+            save_format = "PNG"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=out_ext) as tmp:
+            temp_path = Path(tmp.name)
+        image_to_save = img.convert("RGBA") if save_format == "PNG" else img.convert("RGB")
+        image_to_save.save(temp_path, format=save_format, quality=92, optimize=True)
+        logger.info(
+            "[IMG_DOWNLOAD_OK] marker=%s url=%s content_type=%s detected_format=%s output=%s",
+            marker,
+            image_url,
+            content_type or "unknown",
+            fmt or "unknown",
+            save_format,
+        )
+        return temp_path, None
+    except Exception as exc:
+        logger.warning("[IMG_DOWNLOAD_FAIL] marker=%s url=%s reason=%s", marker, image_url, exc)
+        return None, "download_or_decode_failed"
+
+
 def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int = 20) -> str | None:
+    logger.info("[IMG_EXTRACT_START] feed=%s link=%s", feed_url, link_normalized)
     fp = feedparser.parse(feed_url)
     entries = getattr(fp, "entries", []) or []
     for e in entries[:limit]:
@@ -1700,7 +1771,7 @@ def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int =
         best_url = None
         best_score = None
 
-        def consider(url: str, priority: int, width=None, height=None, base_url: str = ""):
+        def consider(url: str, priority: int, width=None, height=None, base_url: str = "", marker: str = ""):
             nonlocal best_url, best_score
             normalized = _normalize_image_url(url, base_url)
             if not normalized:
@@ -1715,12 +1786,51 @@ def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int =
             if best_score is None or score > best_score:
                 best_score = score
                 best_url = normalized
+                if marker:
+                    logger.info("%s url=%s", marker, normalized)
 
         media_content = _entry_get(e, "media_content", []) or []
         for item in media_content:
             if not isinstance(item, dict):
                 continue
-            consider(item.get("url") or "", priority=500, width=item.get("width"), height=item.get("height"), base_url=link)
+            consider(
+                item.get("url") or "",
+                priority=800,
+                width=item.get("width"),
+                height=item.get("height"),
+                base_url=link,
+                marker="[IMG_FOUND_MEDIA_CONTENT]",
+            )
+
+        media_thumbnail = _entry_get(e, "media_thumbnail", []) or []
+        for item in media_thumbnail:
+            if not isinstance(item, dict):
+                continue
+            consider(
+                item.get("url") or "",
+                priority=700,
+                width=item.get("width"),
+                height=item.get("height"),
+                base_url=link,
+                marker="[IMG_FOUND_MEDIA_THUMBNAIL]",
+            )
+
+        enclosure = _entry_get(e, "enclosure", {}) or {}
+        if isinstance(enclosure, dict):
+            consider(
+                enclosure.get("href") or enclosure.get("url") or "",
+                priority=650,
+                width=enclosure.get("width"),
+                height=enclosure.get("height"),
+                base_url=link,
+                marker="[IMG_FOUND_ENCLOSURE]",
+            )
+
+        media_content = _entry_get(e, "media_content", []) or []
+        for item in media_content:
+            if not isinstance(item, dict):
+                continue
+            consider(item.get("url") or "", priority=600, width=item.get("width"), height=item.get("height"), base_url=link, marker="[IMG_FOUND_MEDIA_CONTENT]")
 
         enclosures = _entry_get(e, "enclosures", []) or []
         for item in enclosures:
@@ -1729,57 +1839,47 @@ def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int =
             url = item.get("url") or ""
             etype = (item.get("type") or "").lower()
             if "image" in etype or not etype:
-                consider(url, priority=400, width=item.get("width"), height=item.get("height"), base_url=link)
+                consider(url, priority=550, width=item.get("width"), height=item.get("height"), base_url=link, marker="[IMG_FOUND_ENCLOSURE]")
 
-        media_thumbnail = _entry_get(e, "media_thumbnail", []) or []
-        for item in media_thumbnail:
-            if not isinstance(item, dict):
-                continue
-            consider(item.get("url") or "", priority=300, width=item.get("width"), height=item.get("height"), base_url=link)
+        image_obj = _entry_get(e, "image", {}) or {}
+        if isinstance(image_obj, dict):
+            consider(
+                image_obj.get("href") or image_obj.get("url") or "",
+                priority=500,
+                base_url=link,
+                marker="[IMG_FOUND_IMAGE_FIELD]",
+            )
 
-        html_chunks = []
-        summary = _entry_get(e, "summary", "") or _entry_get(e, "description", "") or ""
-        if summary:
-            html_chunks.append(summary)
-        content = _entry_get(e, "content", []) or []
-        for item in content:
+        html_sources: list[tuple[str, str, int]] = []
+        content_items = _entry_get(e, "content", []) or []
+        for item in content_items:
             if isinstance(item, dict):
                 value = (item.get("value") or "").strip()
                 if value:
-                    html_chunks.append(value)
+                    html_sources.append((value, "[IMG_FOUND_CONTENT_HTML]", 450))
+        summary_html = _entry_get(e, "summary", "") or ""
+        if summary_html:
+            html_sources.append((summary_html, "[IMG_FOUND_SUMMARY_HTML]", 400))
+        description_html = _entry_get(e, "description", "") or ""
+        if description_html:
+            html_sources.append((description_html, "[IMG_FOUND_DESCRIPTION_HTML]", 350))
 
-        for chunk in html_chunks:
-            chunk_unescaped = html.unescape(chunk)
-            for m in re.finditer(r"<img\b[^>]*>", chunk_unescaped, flags=re.IGNORECASE):
-                tag = m.group(0)
-                src_m = re.search(r"\bsrc=[\"'\"]([^\"'\"]+)[\"'\"]", tag, flags=re.IGNORECASE)
-                if not src_m:
-                    src_m = re.search(r"\bsrc=([^ >]+)", tag, flags=re.IGNORECASE)
-                if not src_m:
-                    src_m = re.search(r"\bdata-src=[\"'\"]([^\"'\"]+)[\"'\"]", tag, flags=re.IGNORECASE)
-                if not src_m:
-                    continue
-                width_m = re.search(r"\bwidth=[\"'\"]?(\d+)", tag, flags=re.IGNORECASE)
-                height_m = re.search(r"\bheight=[\"'\"]?(\d+)", tag, flags=re.IGNORECASE)
-                consider(
-                    src_m.group(1),
-                    priority=200,
-                    width=width_m.group(1) if width_m else None,
-                    height=height_m.group(1) if height_m else None,
-                    base_url=link,
-                )
+        for html_chunk, marker, priority in html_sources:
+            img_url = _extract_first_image_from_html(html_chunk, link)
+            if img_url:
+                consider(img_url, priority=priority, base_url=link, marker=marker)
 
         if best_url:
+            logger.info("[IMG_PIPELINE_RESULT] stage=extract result=image_found source=%s", best_url)
             return best_url
 
         og_image = _extract_og_image(link)
         if og_image:
+            logger.info("[IMG_PIPELINE_RESULT] stage=extract result=og_image url=%s", og_image)
             return og_image
 
-        if best_url:
-            return best_url
-
         break
+    logger.info("[IMG_PIPELINE_RESULT] stage=extract result=no_image")
     return None
 
 
@@ -1879,33 +1979,52 @@ def build_rss_message_payload(cfg: dict, msg: str, link: str) -> tuple[str, list
 
 async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str, image_url: str | None, temp_file: Path | None = None) -> None:
     final_text, final_entities = build_rss_message_payload(cfg, msg, link)
+    used_temp_files: list[Path] = []
+    if temp_file:
+        used_temp_files.append(temp_file)
     try:
         if bool(cfg.get("use_rss_feed_image", True)) and image_url:
-            photo_input = temp_file if temp_file else image_url
             caption = final_text
-            if len(caption) > 1024:
-                caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in final_entities], max_offset=1024)
-                await bot.send_photo(chat_id=channel, photo=photo_input, caption=caption[:1024], caption_entities=caption_entities or None)
-                if len(final_text) > 1024:
-                    remainder_entities = _load_message_entities(
-                        [_message_entity_to_dict(e) for e in final_entities],
-                        min_offset=1024,
-                    )
-                    await bot.send_message(
-                        chat_id=channel,
-                        text=final_text[1024:],
-                        entities=remainder_entities or None,
-                        disable_web_page_preview=False,
-                    )
-                return
-            await bot.send_photo(chat_id=channel, photo=photo_input, caption=caption, caption_entities=final_entities or None)
-            return
+            photo_candidates: list[Path | str] = []
+            photo_candidates.append(temp_file if temp_file else image_url)
+            if not temp_file:
+                fallback_file, _ = _download_image_to_tempfile(image_url, marker="send_fallback_upload")
+                if fallback_file:
+                    photo_candidates.append(fallback_file)
+                    used_temp_files.append(fallback_file)
 
+            for idx, photo_input in enumerate(photo_candidates):
+                try:
+                    logger.info("[TG_SEND_PHOTO] attempt=%s input_type=%s", idx + 1, type(photo_input).__name__)
+                    if len(caption) > 1024:
+                        caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in final_entities], max_offset=1024)
+                        await bot.send_photo(chat_id=channel, photo=photo_input, caption=caption[:1024], caption_entities=caption_entities or None)
+                        if len(final_text) > 1024:
+                            remainder_entities = _load_message_entities(
+                                [_message_entity_to_dict(e) for e in final_entities],
+                                min_offset=1024,
+                            )
+                            await bot.send_message(
+                                chat_id=channel,
+                                text=final_text[1024:],
+                                entities=remainder_entities or None,
+                                disable_web_page_preview=False,
+                            )
+                        logger.info("[IMG_PIPELINE_RESULT] stage=telegram_send result=photo")
+                        return
+                    await bot.send_photo(chat_id=channel, photo=photo_input, caption=caption, caption_entities=final_entities or None)
+                    logger.info("[IMG_PIPELINE_RESULT] stage=telegram_send result=photo")
+                    return
+                except Exception as exc:
+                    logger.warning("[IMG_DOWNLOAD_FAIL] marker=tg_send_photo_attempt reason=%s", exc)
+
+            logger.info("[TG_SEND_TEXT_ONLY] reason=photo_send_failed")
         await bot.send_message(chat_id=channel, text=final_text, entities=final_entities or None, disable_web_page_preview=False)
+        logger.info("[IMG_PIPELINE_RESULT] stage=telegram_send result=text_only")
     finally:
-        if temp_file:
+        for path in used_temp_files:
             try:
-                temp_file.unlink(missing_ok=True)
+                path.unlink(missing_ok=True)
             except Exception:
                 pass
 
@@ -1936,6 +2055,7 @@ async def _ensure_asset_path(bot, cfg: dict, user_id: int, mode: str, asset_type
 
 
 def _compose_rss_image_with_status(template_path: Path, rss_image_url: str, watermark_path: Path | None = None) -> tuple[Path | None, str | None]:
+    logger.info("[IMG_PROCESS_START] stage=template_compose url=%s", rss_image_url)
     base = None
     rss_img = None
     try:
@@ -1944,13 +2064,20 @@ def _compose_rss_image_with_status(template_path: Path, rss_image_url: str, wate
         logger.warning("RSS preview template load failed: %s", template_path)
         return None, "template_load_failed"
 
-    try:
-        rss_resp = requests.get(rss_image_url, timeout=20)
-        rss_resp.raise_for_status()
-        rss_img = Image.open(io.BytesIO(rss_resp.content)).convert("RGBA")
-    except Exception:
-        logger.warning("RSS preview source image download/open failed: %s", rss_image_url)
+    downloaded_path, _ = _download_image_to_tempfile(rss_image_url, marker="compose_template")
+    if not downloaded_path:
+        logger.warning("[IMG_PROCESS_FAIL] stage=template_compose reason=rss_image_unusable")
         return None, "rss_image_unusable"
+    try:
+        rss_img = Image.open(downloaded_path).convert("RGBA")
+    except Exception:
+        logger.warning("[IMG_PROCESS_FAIL] stage=template_compose reason=rss_image_unusable")
+        return None, "rss_image_unusable"
+    finally:
+        try:
+            downloaded_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     quality_issue = _rss_image_quality_issue(rss_img, rss_image_url)
     if quality_issue:
@@ -2007,9 +2134,10 @@ def _compose_rss_image_with_status(template_path: Path, rss_image_url: str, wate
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             temp_path = Path(tmp.name)
         composed.save(temp_path, format="JPEG", quality=92, optimize=True)
+        logger.info("[IMG_PROCESS_OK] stage=template_compose output=%s", temp_path)
         return temp_path, None
-    except Exception:
-        logger.warning("RSS image composition failed")
+    except Exception as exc:
+        logger.warning("[IMG_PROCESS_FAIL] stage=template_compose reason=%s", exc)
         return None, "compose_failed"
 
 
@@ -2022,13 +2150,21 @@ def _compose_vertical_rss_image_with_optional_watermark(
     rss_image_url: str,
     watermark_path: Path | None = None,
 ) -> tuple[Path | None, bool, str | None]:
-    try:
-        rss_resp = requests.get(rss_image_url, timeout=20)
-        rss_resp.raise_for_status()
-        rss_img = Image.open(io.BytesIO(rss_resp.content)).convert("RGBA")
-    except Exception:
-        logger.warning("Vertical RSS source image download/open failed: %s", rss_image_url)
+    logger.info("[IMG_PROCESS_START] stage=vertical_compose url=%s", rss_image_url)
+    downloaded_path, _ = _download_image_to_tempfile(rss_image_url, marker="compose_vertical")
+    if not downloaded_path:
+        logger.warning("[IMG_PROCESS_FAIL] stage=vertical_compose reason=rss_image_unusable")
         return None, False, "rss_image_unusable"
+    try:
+        rss_img = Image.open(downloaded_path).convert("RGBA")
+    except Exception:
+        logger.warning("[IMG_PROCESS_FAIL] stage=vertical_compose reason=rss_image_unusable")
+        return None, False, "rss_image_unusable"
+    finally:
+        try:
+            downloaded_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     source_ratio = rss_img.width / max(1, rss_img.height)
     if source_ratio >= 0.75:
@@ -2053,14 +2189,16 @@ def _compose_vertical_rss_image_with_optional_watermark(
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             temp_path = Path(tmp.name)
         rss_img.convert("RGB").save(temp_path, format="JPEG", quality=92, optimize=True)
+        logger.info("[IMG_PROCESS_OK] stage=vertical_compose output=%s", temp_path)
         return temp_path, True, None
-    except Exception:
-        logger.warning("Vertical RSS image processing failed")
+    except Exception as exc:
+        logger.warning("[IMG_PROCESS_FAIL] stage=vertical_compose reason=%s", exc)
         return None, True, "compose_failed"
 
 
 async def prepare_rss_image_for_sending(bot, cfg: dict, user_id: int, image_url: str | None) -> tuple[str | None, Path | None]:
     if not image_url:
+        logger.info("[IMG_PIPELINE_RESULT] stage=prepare result=no_source_image")
         return None, None
     if not bool(cfg.get("use_rss_feed_image", True)):
         return image_url, None
@@ -2072,8 +2210,7 @@ async def prepare_rss_image_for_sending(bot, cfg: dict, user_id: int, image_url:
     vertical_path, is_vertical, vertical_error = _compose_vertical_rss_image_with_optional_watermark(image_url, watermark_path)
     if is_vertical:
         if not vertical_path:
-            if vertical_error in {"rss_image_unusable", "rss_image_rejected", "compose_failed"}:
-                return None, None
+            logger.info("[IMG_FALLBACK_ORIGINAL] reason=%s url=%s", vertical_error or "vertical_transform_failed", image_url)
             return image_url, None
         return str(vertical_path), vertical_path
 
@@ -2086,8 +2223,7 @@ async def prepare_rss_image_for_sending(bot, cfg: dict, user_id: int, image_url:
 
     composed_path, compose_error = _compose_rss_image_with_status(template_path, image_url, watermark_path)
     if not composed_path:
-        if compose_error in {"rss_image_unusable", "rss_image_rejected", "compose_failed"}:
-            return None, None
+        logger.info("[IMG_FALLBACK_ORIGINAL] reason=%s url=%s", compose_error or "template_compose_failed", image_url)
         return image_url, None
     return str(composed_path), composed_path
 
@@ -2110,8 +2246,7 @@ async def prepare_rss_preview_image_for_sending(bot, cfg: dict, user_id: int, im
     vertical_path, is_vertical, vertical_error = _compose_vertical_rss_image_with_optional_watermark(image_url, watermark_path)
     if is_vertical:
         if not vertical_path:
-            if vertical_error in {"rss_image_unusable", "rss_image_rejected"}:
-                return None, None, "preview_status_no_rss_image_text_only"
+            logger.info("[IMG_FALLBACK_ORIGINAL] reason=%s url=%s", vertical_error or "vertical_transform_failed", image_url)
             return image_url, None, "preview_status_template_build_failed_normal"
         return str(vertical_path), vertical_path, None
 
@@ -2130,7 +2265,8 @@ async def prepare_rss_preview_image_for_sending(bot, cfg: dict, user_id: int, im
     composed_path, compose_error = _compose_rss_image_with_status(template_path, image_url, watermark_path)
     if not composed_path:
         if compose_error in {"rss_image_unusable", "rss_image_rejected"}:
-            return None, None, "preview_status_no_rss_image_text_only"
+            logger.info("[IMG_FALLBACK_ORIGINAL] reason=%s url=%s", compose_error, image_url)
+            return image_url, None, "preview_status_template_build_failed_normal"
         if compose_error in {"template_load_failed", "watermark_load_failed"}:
             return image_url, None, "preview_status_asset_load_failed_normal"
         return image_url, None, "preview_status_template_build_failed_normal"
