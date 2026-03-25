@@ -971,33 +971,111 @@ def _looks_like_html_response(content_type: str, body: str) -> bool:
     return "text/html" in ct or prefix.startswith("<!doctype html") or prefix.startswith("<html")
 
 
+def _looks_like_xml_response(content_type: str, body: str) -> bool:
+    ct = (content_type or "").lower()
+    if any(token in ct for token in ("xml", "rss", "atom")):
+        return True
+    prefix = (body or "").lstrip()[:256].lower()
+    return (
+        prefix.startswith("<?xml")
+        or prefix.startswith("<rss")
+        or prefix.startswith("<feed")
+        or prefix.startswith("<rdf:rdf")
+    )
+
+
+def _raw_body_has_feed_items(body: str) -> bool:
+    sample = (body or "").lower()
+    return "<item" in sample or "<entry" in sample
+
+
+def _feed_title(feed_data) -> str:
+    feed_meta = getattr(feed_data, "feed", None) or {}
+    return str(_entry_get(feed_meta, "title", "") or "").strip()
+
+
+def _feed_entries_count(feed_data) -> int:
+    entries = getattr(feed_data, "entries", None) or []
+    return len(entries)
+
+
 def _validate_candidate_feed_url(candidate: str) -> tuple[bool, str]:
     logger.info("[FEED_VALIDATE_START] candidate=%s", candidate)
+    logger.info("[FEED_URL] %s", candidate)
     if not _candidate_is_valid_http_url(candidate):
         logger.info("[FEED_VALIDATE_FAIL] candidate=%s reason=candidate_feed_invalid", candidate)
         return False, "candidate_feed_invalid"
-    parsed = feedparser.parse(candidate)
-    if _feed_has_metadata(parsed) and _feed_has_entries(parsed):
+    try:
+        parsed = feedparser.parse(candidate)
+    except Exception as exc:
+        logger.info("[FEED_VALIDATE_FAIL] candidate=%s reason=parse_failed error=%s", candidate, exc)
+        logger.info("[FEED_VALIDATION_RESULT] invalid reason=parse_failed")
+        return False, "parse_failed"
+    title = _feed_title(parsed)
+    entries_count = _feed_entries_count(parsed)
+    logger.info("[FEED_ENTRIES_COUNT] %s", entries_count)
+    logger.info("[FEED_TITLE] %s", title or "-")
+    if title or entries_count > 0:
         logger.info("[FEED_VALIDATE_OK] candidate=%s", candidate)
+        logger.info("[FEED_VALIDATION_RESULT] valid")
         return True, ""
     try:
         resp = requests.get(candidate, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
+        logger.info("[FEED_HTTP_STATUS] %s", resp.status_code)
+        logger.info("[FEED_CONTENT_TYPE] %s", resp.headers.get("Content-Type", ""))
     except Exception as exc:
         logger.info("[FEED_VALIDATE_FAIL] candidate=%s reason=request_error error=%s", candidate, exc)
-        return False, "candidate_feed_invalid"
-    parsed = feedparser.parse(resp.content)
-    if _looks_like_html_response(resp.headers.get("Content-Type", ""), resp.text) and not _feed_has_entries(parsed):
-        logger.info("[FEED_VALIDATE_FAIL] candidate=%s reason=candidate_feed_invalid", candidate)
-        return False, "candidate_feed_invalid"
-    if not _feed_has_metadata(parsed):
-        logger.info("[FEED_VALIDATE_FAIL] candidate=%s reason=candidate_feed_invalid", candidate)
-        return False, "candidate_feed_invalid"
-    if not _feed_has_entries(parsed):
-        logger.info("[FEED_VALIDATE_FAIL] candidate=%s reason=candidate_feed_empty", candidate)
-        return False, "candidate_feed_empty"
-    logger.info("[FEED_VALIDATE_OK] candidate=%s", candidate)
-    return True, ""
+        code = getattr(getattr(exc, "response", None), "status_code", None)
+        logger.info("[FEED_VALIDATION_RESULT] invalid reason=request_error")
+        return False, f"http_error_{code}" if code else "request_error"
+    body = resp.text
+    if not _looks_like_xml_response(resp.headers.get("Content-Type", ""), body) and _looks_like_html_response(resp.headers.get("Content-Type", ""), body):
+        logger.info("[FEED_VALIDATE_FAIL] candidate=%s reason=response_not_xml", candidate)
+        logger.info("[FEED_VALIDATION_RESULT] invalid reason=response_not_xml")
+        return False, "response_not_xml"
+    try:
+        parsed = feedparser.parse(resp.content)
+    except Exception as exc:
+        logger.info("[FEED_VALIDATE_FAIL] candidate=%s reason=parse_failed error=%s", candidate, exc)
+        logger.info("[FEED_VALIDATION_RESULT] invalid reason=parse_failed")
+        return False, "parse_failed"
+    title = _feed_title(parsed)
+    entries_count = _feed_entries_count(parsed)
+    raw_has_items = _raw_body_has_feed_items(body)
+    logger.info("[FEED_ENTRIES_COUNT] %s", entries_count)
+    logger.info("[FEED_TITLE] %s", title or "-")
+    if title or entries_count > 0 or raw_has_items:
+        logger.info("[FEED_VALIDATE_OK] candidate=%s", candidate)
+        logger.info("[FEED_VALIDATION_RESULT] valid")
+        return True, ""
+    logger.info("[FEED_VALIDATE_FAIL] candidate=%s reason=feed_parsed_but_empty", candidate)
+    logger.info("[FEED_VALIDATION_RESULT] invalid reason=feed_parsed_but_empty")
+    return False, "feed_parsed_but_empty"
+
+
+def _feed_validation_reason_text(reason: str | None) -> str:
+    code = (reason or "").strip()
+    if not code:
+        return "Feed validation failed."
+    if code.startswith("http_error_"):
+        status = code.replace("http_error_", "", 1) or "unknown"
+        return f"HTTP error {status}"
+    if code == "response_not_xml":
+        return "Response is not valid XML"
+    if code == "feed_parsed_but_empty":
+        return "Feed parsed but contains 0 entries"
+    if code == "request_error":
+        return "Request error while fetching feed"
+    if code in {"parse_failed", "candidate_feed_invalid"}:
+        return "Feed parsing failed"
+    if code == "candidate_feed_empty":
+        return "Feed parsed but contains 0 entries"
+    return code
+
+
+def _feed_validation_error_message(cfg: dict, reason: str | None) -> str:
+    return f"{ui_text(cfg, 'feed_read_failed')}\n\nReason: {_feed_validation_reason_text(reason)}"
 
 
 def _resolve_x_fallback_provider_url(provider: str, normalized_x_url: str, username: str) -> tuple[str | None, str]:
@@ -1022,20 +1100,11 @@ def _built_in_x_fallbacks() -> list[str]:
 
 
 def _feed_has_entries(feed_data) -> bool:
-    entries = getattr(feed_data, "entries", None) or []
-    for entry in entries:
-        if _entry_has_content(entry):
-            return True
-    return False
+    return _feed_entries_count(feed_data) > 0
 
 
 def _feed_has_metadata(feed_data) -> bool:
-    feed_meta = getattr(feed_data, "feed", None) or {}
-    for key in ("title", "subtitle", "link", "id"):
-        value = str(_entry_get(feed_meta, key, "") or "").strip()
-        if value:
-            return True
-    return False
+    return bool(_feed_title(feed_data))
 
 
 def _entry_has_content(entry) -> bool:
@@ -1174,7 +1243,7 @@ def _create_x_profile_feed(normalized_x_url: str, username: str) -> tuple[str | 
         if valid:
             logger.info("X feed provider success: provider=%s source=%s candidate=%s", provider_name, normalized_x_url, fallback_url)
             return fallback_url, ""
-        last_reason = reason if reason.startswith("candidate_feed_") else "fallback_provider_failed"
+        last_reason = reason or "fallback_provider_failed"
     return None, last_reason
 
 
@@ -1226,9 +1295,9 @@ async def process_feed_input(update: Update, context: ContextTypes.DEFAULT_TYPE,
         context.user_data.pop("awaiting_feed_add", None)
         logger.info("[FEED_VALIDATE_FAIL] user_id=%s status=%s reason=%s input=%s", user_id, status, reason or "unknown", url)
         if status == "failed":
-            await update.message.reply_text(_feed_auto_fail_message(cfg, user_id, reason))
+            await update.message.reply_text(f"{_feed_auto_fail_message(cfg, user_id, reason)}\n\nReason: {_feed_validation_reason_text(reason)}")
         else:
-            await update.message.reply_text(ui_text(cfg, "feed_read_failed"))
+            await update.message.reply_text(_feed_validation_error_message(cfg, reason))
         return
 
     context.user_data["awaiting_feed_add"] = "name"
