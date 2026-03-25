@@ -177,7 +177,7 @@ TEXTS = {
     "6) Paid posting:\n"
     "   Ask admin to activate, then /fetchonce or /autoposton"
 ),
-"ui_addfeed": "Send a direct RSS feed URL.\nOr send an X/Twitter profile link — I'll create the RSS feed automatically.\n\n/addfeed [your link]",
+"ui_addfeed": "Send a direct RSS link or an X/Twitter profile link and I will process it automatically.",
 "ui_setchannel": "Add the bot to your channel as an admin, then forward one message from that channel here.\nI will use that forwarded message to connect the channel.",
 "ui_setstyle": "Paste your style prompt like:\n/setstyle <your text>\n\nExample: language, tone, length, emojis, forbidden topics.",
 "ui_pay": "Payment / activation:\n{pay}",
@@ -253,7 +253,7 @@ TEXTS = {
     "6) Публикации (платно):\n"
     "   Активация админом, потом /fetchonce или /autoposton"
 ),
-"ui_addfeed": "Отправьте прямую RSS-ссылку.\nИли отправьте ссылку на профиль X/Twitter — я создам RSS автоматически.\n\n/addfeed [ваша ссылка]",
+"ui_addfeed": "Отправьте прямую RSS-ссылку или ссылку на профиль X/Twitter — я обработаю её автоматически.",
 "ui_setchannel": "Добавьте бота в канал как администратора, а затем перешлите сюда одно сообщение из этого канала.\nЯ использую это пересланное сообщение, чтобы подключить канал.",
 "ui_setstyle": "Вставьте prompt стиля так:\n/setstyle <ваш текст>\n\nПример: язык, тон, длина, эмодзи, запреты.",
 "ui_pay": "Оплата / активация:\n{pay}",
@@ -972,23 +972,31 @@ def _looks_like_html_response(content_type: str, body: str) -> bool:
 
 
 def _validate_candidate_feed_url(candidate: str) -> tuple[bool, str]:
+    logger.info("[FEED_VALIDATE_START] candidate=%s", candidate)
     if not _candidate_is_valid_http_url(candidate):
+        logger.info("[FEED_VALIDATE_FAIL] candidate=%s reason=candidate_feed_invalid", candidate)
         return False, "candidate_feed_invalid"
     parsed = feedparser.parse(candidate)
     if _feed_has_metadata(parsed) and _feed_has_entries(parsed):
+        logger.info("[FEED_VALIDATE_OK] candidate=%s", candidate)
         return True, ""
     try:
         resp = requests.get(candidate, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
-    except Exception:
+    except Exception as exc:
+        logger.info("[FEED_VALIDATE_FAIL] candidate=%s reason=request_error error=%s", candidate, exc)
         return False, "candidate_feed_invalid"
     parsed = feedparser.parse(resp.content)
     if _looks_like_html_response(resp.headers.get("Content-Type", ""), resp.text) and not _feed_has_entries(parsed):
+        logger.info("[FEED_VALIDATE_FAIL] candidate=%s reason=candidate_feed_invalid", candidate)
         return False, "candidate_feed_invalid"
     if not _feed_has_metadata(parsed):
+        logger.info("[FEED_VALIDATE_FAIL] candidate=%s reason=candidate_feed_invalid", candidate)
         return False, "candidate_feed_invalid"
     if not _feed_has_entries(parsed):
+        logger.info("[FEED_VALIDATE_FAIL] candidate=%s reason=candidate_feed_empty", candidate)
         return False, "candidate_feed_empty"
+    logger.info("[FEED_VALIDATE_OK] candidate=%s", candidate)
     return True, ""
 
 
@@ -1139,8 +1147,8 @@ def _create_x_profile_feed(normalized_x_url: str, username: str) -> tuple[str | 
     if FEED_CREATION_ENDPOINT:
         endpoint_candidate, _ = _resolve_x_fallback_provider_url(FEED_CREATION_ENDPOINT, normalized_x_url, username)
         if endpoint_candidate:
-            logger.info("X transform username parsed: %s", username)
-            logger.info("X transform rsshub candidate: %s", endpoint_candidate)
+            logger.info("[X_LINK_DETECTED] username=%s profile=%s", username, normalized_x_url)
+            logger.info("[RSSHUB_TRANSFORM] source=%s candidate=%s", normalized_x_url, endpoint_candidate)
             valid, invalid_reason = _validate_candidate_feed_url(endpoint_candidate)
             if valid:
                 logger.info(
@@ -1150,7 +1158,7 @@ def _create_x_profile_feed(normalized_x_url: str, username: str) -> tuple[str | 
                 )
                 return endpoint_candidate, ""
             last_reason = invalid_reason
-            logger.info("X transform rsshub candidate validation failed: %s", invalid_reason or "candidate_feed_invalid")
+            logger.info("[FEED_VALIDATE_FAIL] candidate=%s reason=%s", endpoint_candidate, invalid_reason or "candidate_feed_invalid")
         else:
             last_reason = "primary_endpoint_missing"
     else:
@@ -1175,17 +1183,17 @@ def resolve_feed_input_url(raw_url: str) -> tuple[str | None, str, str | None, b
     if not url:
         return None, "invalid", "invalid_x_profile_url", False
 
-    direct = feedparser.parse(url)
-    if _feed_has_entries(direct):
+    direct_valid, direct_reason = _validate_candidate_feed_url(url)
+    if direct_valid:
         return url, "direct", None, False
 
     if _looks_like_direct_feed_url(url):
-        return None, "invalid", None, False
+        return None, "invalid", direct_reason or "candidate_feed_invalid", False
 
     normalized_x_url, x_username, normalize_reason = _normalize_x_profile_url(url)
     if not normalized_x_url:
-        return None, "failed", normalize_reason or "invalid_x_profile_url", True
-    logger.info("Normalized X profile url: source=%s normalized=%s username=%s", url, normalized_x_url, x_username)
+        return None, "invalid", normalize_reason or direct_reason or "candidate_feed_invalid", False
+    logger.info("[X_LINK_DETECTED] source=%s normalized=%s username=%s", url, normalized_x_url, x_username)
 
     created, reason = _create_x_profile_feed(normalized_x_url, x_username)
     if created:
@@ -1193,6 +1201,40 @@ def resolve_feed_input_url(raw_url: str) -> tuple[str | None, str, str | None, b
 
     logger.info("X profile feed creation failed: source=%s reason=%s", normalized_x_url, reason)
     return None, "failed", reason or "fallback_provider_failed", True
+
+
+async def process_feed_input(update: Update, context: ContextTypes.DEFAULT_TYPE, cfg: dict, user_id: int, raw_url: str, *, from_plain_text: bool = False) -> None:
+    url = (raw_url or "").strip()
+    logger.info("[ADD_FEED_PROCESS] user_id=%s from_plain_text=%s input=%s", user_id, from_plain_text, url)
+    feeds = cfg.get("feeds", [])
+    limit = feed_limit_per_channel(cfg)
+
+    if _find_feed_by_url(feeds, url):
+        logger.info("[FEED_VALIDATE_FAIL] user_id=%s reason=duplicate_feed url=%s", user_id, url)
+        context.user_data.pop("awaiting_feed_add", None)
+        await update.message.reply_text(ui_text(cfg, "feed_duplicate"))
+        return
+    if len(feeds) >= limit:
+        logger.info("[FEED_VALIDATE_FAIL] user_id=%s reason=feed_limit_reached limit=%s", user_id, limit)
+        context.user_data.pop("awaiting_feed_add", None)
+        await update.message.reply_text(ui_text(cfg, "feed_limit_reached").format(limit=limit))
+        return
+
+    await update.message.reply_text("Processing your feed...")
+    feed_url, status, reason, is_x_attempt = resolve_feed_input_url(url)
+    if not feed_url:
+        context.user_data.pop("awaiting_feed_add", None)
+        logger.info("[FEED_VALIDATE_FAIL] user_id=%s status=%s reason=%s input=%s", user_id, status, reason or "unknown", url)
+        if status == "failed":
+            await update.message.reply_text(_feed_auto_fail_message(cfg, user_id, reason))
+        else:
+            await update.message.reply_text(ui_text(cfg, "feed_read_failed"))
+        return
+
+    context.user_data["awaiting_feed_add"] = "name"
+    context.user_data["pending_feed_url"] = feed_url
+    logger.info("[FEED_VALIDATE_OK] user_id=%s input=%s resolved=%s is_x=%s", user_id, url, feed_url, is_x_attempt)
+    await update.message.reply_text(ui_text(cfg, "feed_name_prompt"))
 
 # ===================== RSS helpers =====================
 def _entry_time_struct(entry):
@@ -5427,6 +5469,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:addfeed":
         context.user_data["awaiting_feed_add"] = "url"
         context.user_data.pop("pending_feed_url", None)
+        logger.info("[ADD_FEED_STATE] user_id=%s state=url", user_id)
         await q.answer()
         await q.message.reply_text(tr(cfg, "ui_addfeed") + "\n\n" + feeds_overview(cfg))
         return
@@ -6187,32 +6230,13 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await send_menu(update, cfg, ui_text(cfg, "feed_added") + "\n\n" + feeds_overview(cfg))
             return
 
-        context.user_data["awaiting_feed_add"] = "name"
-        url = text.strip()
-        feeds = cfg.get("feeds", [])
-        limit = feed_limit_per_channel(cfg)
-        if _find_feed_by_url(feeds, url):
-            logger.info("Feed add failed: stage=duplicate_feed user_id=%s url=%s", user_id, url)
+        logger.info("[ADD_FEED_TEXT] user_id=%s text=%s", user_id, text.strip())
+        try:
+            await process_feed_input(update, context, cfg, user_id, text, from_plain_text=True)
+        except Exception as exc:
+            logger.exception("[ADD_FEED_ERROR] user_id=%s stage=url error=%s", user_id, exc)
             context.user_data.pop("awaiting_feed_add", None)
-            await send_menu(update, cfg, ui_text(cfg, "feed_duplicate"))
-            return
-        if len(feeds) >= limit:
-            logger.info("Feed add failed: stage=feed_limit_reached user_id=%s limit=%s", user_id, limit)
-            context.user_data.pop("awaiting_feed_add", None)
-            await send_menu(update, cfg, ui_text(cfg, "feed_limit_reached").format(limit=limit))
-            return
-        feed_url, status, reason, is_x_attempt = resolve_feed_input_url(url)
-        if not feed_url:
-            context.user_data.pop("awaiting_feed_add", None)
-            if status == "failed":
-                if is_x_attempt:
-                    logger.info("Feed add failed: stage=%s user_id=%s source=x_profile", reason or "fallback_provider_failed", user_id)
-                await send_menu(update, cfg, _feed_auto_fail_message(cfg, user_id, reason))
-            else:
-                await send_menu(update, cfg, ui_text(cfg, "feed_read_failed"))
-            return
-        context.user_data["pending_feed_url"] = feed_url
-        await update.message.reply_text(ui_text(cfg, "feed_name_prompt"))
+            await update.message.reply_text(ui_text(cfg, "feed_read_failed"))
         return
 
     state = context.user_data.get("style_wizard")
@@ -6305,32 +6329,11 @@ async def addfeed_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text("Usage: /addfeed [your link]")
         return
 
-    url = context.args[0].strip()
-    feeds = cfg.get("feeds", [])
-    limit = feed_limit_per_channel(cfg)
-
-    if _find_feed_by_url(feeds, url):
-        logger.info("Feed add failed: stage=duplicate_feed user_id=%s url=%s", user_id, url)
-        await update.message.reply_text(ui_text(cfg, "feed_duplicate"))
-        return
-    if len(feeds) >= limit:
-        logger.info("Feed add failed: stage=feed_limit_reached user_id=%s limit=%s", user_id, limit)
-        await update.message.reply_text(ui_text(cfg, "feed_limit_reached").format(limit=limit))
-        return
-
-    feed_url, status, reason, is_x_attempt = resolve_feed_input_url(url)
-    if not feed_url:
-        if status == "failed":
-            if is_x_attempt:
-                logger.info("Feed add failed: stage=%s user_id=%s source=x_profile", reason or "fallback_provider_failed", user_id)
-            await update.message.reply_text(_feed_auto_fail_message(cfg, user_id, reason))
-        else:
-            await update.message.reply_text(ui_text(cfg, "feed_read_failed"))
-        return
-
-    context.user_data["awaiting_feed_add"] = "name"
-    context.user_data["pending_feed_url"] = feed_url
-    await update.message.reply_text(ui_text(cfg, "feed_name_prompt"))
+    try:
+        await process_feed_input(update, context, cfg, user_id, context.args[0], from_plain_text=False)
+    except Exception as exc:
+        logger.exception("[ADD_FEED_ERROR] user_id=%s source=command error=%s", user_id, exc)
+        await update.message.reply_text(ui_text(cfg, "feed_read_failed"))
 
 async def feeds_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
