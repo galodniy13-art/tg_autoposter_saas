@@ -404,6 +404,8 @@ DEFAULT_CLIENT = {
     "rss_template_image_path": "",
     "rss_watermark_file_id": "",
     "rss_watermark_image_path": "",
+    "rss_watermark_scale_pct": 18.0,
+    "rss_watermark_margin_pct": 3.5,
     "creative_template_file_id": "",
     "creative_template_image_path": "",
     "creative_watermark_file_id": "",
@@ -499,6 +501,8 @@ CHANNEL_SCOPED_KEYS = (
     "rss_template_image_path",
     "rss_watermark_file_id",
     "rss_watermark_image_path",
+    "rss_watermark_scale_pct",
+    "rss_watermark_margin_pct",
     "creative_template_file_id",
     "creative_template_image_path",
     "creative_watermark_file_id",
@@ -1759,6 +1763,96 @@ def _download_image_to_tempfile(image_url: str, marker: str = "normal") -> tuple
         return None, "download_or_decode_failed"
 
 
+def _watermark_ratios(cfg: dict, mode: str = "rss") -> tuple[float, float]:
+    scale_pct = cfg.get(f"{mode}_watermark_scale_pct", 18.0)
+    margin_pct = cfg.get(f"{mode}_watermark_margin_pct", 3.5)
+    try:
+        scale_ratio = float(scale_pct) / 100.0
+    except (TypeError, ValueError):
+        scale_ratio = 0.18
+    try:
+        margin_ratio = float(margin_pct) / 100.0
+    except (TypeError, ValueError):
+        margin_ratio = 0.035
+    scale_ratio = min(0.35, max(0.08, scale_ratio))
+    margin_ratio = min(0.12, max(0.01, margin_ratio))
+    return scale_ratio, margin_ratio
+
+
+def _apply_watermark_to_canvas(
+    canvas: Image.Image,
+    watermark_path: Path | None,
+    cfg: dict,
+    mode: str = "rss",
+    branch: str = "unknown",
+) -> bool:
+    logger.info("[WM_APPLY_START] branch=%s", branch)
+    if not watermark_path or not watermark_path.exists() or not watermark_path.is_file():
+        logger.warning("[WM_APPLY_FAIL] branch=%s reason=watermark_file_missing path=%s", branch, watermark_path)
+        return False
+    try:
+        wm = Image.open(watermark_path).convert("RGBA")
+        canvas_w, canvas_h = canvas.size
+        logger.info("[WM_IMAGE_INPUT_SIZE] branch=%s width=%s height=%s", branch, wm.width, wm.height)
+        logger.info("[WM_FINAL_CANVAS_SIZE] branch=%s width=%s height=%s", branch, canvas_w, canvas_h)
+
+        scale_ratio, margin_ratio = _watermark_ratios(cfg, mode)
+        target_w = max(24, int(canvas_w * scale_ratio))
+        target_w = min(target_w, max(24, int(canvas_w * 0.5)))
+        target_h = max(1, int(target_w * (wm.height / max(1, wm.width))))
+        wm_resized = wm.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+        margin_px = max(8, int(min(canvas_w, canvas_h) * margin_ratio))
+        pos_x = max(margin_px, canvas_w - wm_resized.width - margin_px)
+        pos_y = max(margin_px, canvas_h - wm_resized.height - margin_px)
+
+        logger.info("[WM_SCALE] branch=%s ratio=%.4f width=%s height=%s", branch, scale_ratio, wm_resized.width, wm_resized.height)
+        logger.info("[WM_MARGIN] branch=%s ratio=%.4f px=%s", branch, margin_ratio, margin_px)
+        logger.info("[WM_POSITION] branch=%s corner=bottom_right x=%s y=%s", branch, pos_x, pos_y)
+
+        canvas.paste(wm_resized, (pos_x, pos_y), wm_resized)
+        logger.info("[WM_APPLY_OK] branch=%s", branch)
+        return True
+    except Exception as exc:
+        logger.warning("[WM_APPLY_FAIL] branch=%s reason=%s", branch, exc)
+        return False
+
+
+def _watermark_original_image_with_status(
+    cfg: dict,
+    image_url: str,
+    watermark_path: Path | None,
+    mode: str = "rss",
+    branch: str = "original_fallback",
+) -> tuple[Path | None, str | None]:
+    downloaded_path, err = _download_image_to_tempfile(image_url, marker="wm_original")
+    if not downloaded_path:
+        return None, err or "source_download_failed"
+    try:
+        img = Image.open(downloaded_path).convert("RGBA")
+    except Exception as exc:
+        try:
+            downloaded_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return None, f"source_decode_failed:{exc}"
+    finally:
+        try:
+            downloaded_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    if not _apply_watermark_to_canvas(img, watermark_path, cfg, mode=mode, branch=branch):
+        return None, "watermark_apply_failed"
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+            temp_path = Path(tmp.name)
+        img.convert("RGB").save(temp_path, format="JPEG", quality=92, optimize=True)
+        return temp_path, None
+    except Exception as exc:
+        return None, f"save_failed:{exc}"
+
+
 def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int = 20) -> str | None:
     logger.info("[IMG_EXTRACT_START] feed=%s link=%s", feed_url, link_normalized)
     fp = feedparser.parse(feed_url)
@@ -2054,7 +2148,12 @@ async def _ensure_asset_path(bot, cfg: dict, user_id: int, mode: str, asset_type
         return ""
 
 
-def _compose_rss_image_with_status(template_path: Path, rss_image_url: str, watermark_path: Path | None = None) -> tuple[Path | None, str | None]:
+def _compose_rss_image_with_status(
+    template_path: Path,
+    rss_image_url: str,
+    watermark_path: Path | None = None,
+    cfg: dict | None = None,
+) -> tuple[Path | None, str | None]:
     logger.info("[IMG_PROCESS_START] stage=template_compose url=%s", rss_image_url)
     base = None
     rss_img = None
@@ -2117,18 +2216,8 @@ def _compose_rss_image_with_status(template_path: Path, rss_image_url: str, wate
         paste_y = margin_y + max(0, (area_h - fitted_h) // 2)
         base.paste(fitted, (paste_x, paste_y), fitted)
 
-        if watermark_path and watermark_path.exists() and watermark_path.is_file():
-            try:
-                wm = Image.open(watermark_path).convert("RGBA")
-                max_w = max(24, int(canvas_w * 0.22))
-                max_h = max(24, int(canvas_h * 0.12))
-                wm.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
-                pad = max(8, int(min(canvas_w, canvas_h) * 0.03))
-                pos = (canvas_w - wm.width - pad, canvas_h - wm.height - pad)
-                base.paste(wm, pos, wm)
-            except Exception:
-                logger.warning("RSS preview watermark load failed: %s", watermark_path)
-                return None, "watermark_load_failed"
+        if watermark_path and not _apply_watermark_to_canvas(base, watermark_path, cfg or {}, mode="rss", branch="template_compose"):
+            return None, "watermark_apply_failed"
 
         composed = base.convert("RGB")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
@@ -2141,14 +2230,20 @@ def _compose_rss_image_with_status(template_path: Path, rss_image_url: str, wate
         return None, "compose_failed"
 
 
-def _compose_rss_image(template_path: Path, rss_image_url: str, watermark_path: Path | None = None) -> Path | None:
-    composed_path, _ = _compose_rss_image_with_status(template_path, rss_image_url, watermark_path)
+def _compose_rss_image(
+    template_path: Path,
+    rss_image_url: str,
+    watermark_path: Path | None = None,
+    cfg: dict | None = None,
+) -> Path | None:
+    composed_path, _ = _compose_rss_image_with_status(template_path, rss_image_url, watermark_path, cfg=cfg)
     return composed_path
 
 
 def _compose_vertical_rss_image_with_optional_watermark(
     rss_image_url: str,
     watermark_path: Path | None = None,
+    cfg: dict | None = None,
 ) -> tuple[Path | None, bool, str | None]:
     logger.info("[IMG_PROCESS_START] stage=vertical_compose url=%s", rss_image_url)
     downloaded_path, _ = _download_image_to_tempfile(rss_image_url, marker="compose_vertical")
@@ -2176,15 +2271,8 @@ def _compose_vertical_rss_image_with_optional_watermark(
         return None, True, "rss_image_rejected"
 
     try:
-        if watermark_path and watermark_path.exists() and watermark_path.is_file():
-            wm = Image.open(watermark_path).convert("RGBA")
-            canvas_w, canvas_h = rss_img.size
-            max_w = max(24, int(canvas_w * 0.22))
-            max_h = max(24, int(canvas_h * 0.12))
-            wm.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
-            pad = max(8, int(min(canvas_w, canvas_h) * 0.03))
-            pos = (canvas_w - wm.width - pad, canvas_h - wm.height - pad)
-            rss_img.paste(wm, pos, wm)
+        if watermark_path and not _apply_watermark_to_canvas(rss_img, watermark_path, cfg or {}, mode="rss", branch="vertical_compose"):
+            return None, True, "watermark_apply_failed"
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             temp_path = Path(tmp.name)
@@ -2205,24 +2293,56 @@ async def prepare_rss_image_for_sending(bot, cfg: dict, user_id: int, image_url:
     if str(cfg.get("mode") or "").strip().lower() not in ("rss", "both"):
         return image_url, None
 
+    watermark_enabled = bool(cfg.get("rss_watermark_file_id"))
+    logger.info("[WM_ENABLED] branch=prepare_send enabled=%s", watermark_enabled)
     watermark_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "watermark")
     watermark_path = (BASE_DIR / watermark_rel) if watermark_rel else None
-    vertical_path, is_vertical, vertical_error = _compose_vertical_rss_image_with_optional_watermark(image_url, watermark_path)
+    logger.info("[WM_BRANCH] branch=vertical_compose")
+    vertical_path, is_vertical, vertical_error = _compose_vertical_rss_image_with_optional_watermark(image_url, watermark_path, cfg=cfg)
     if is_vertical:
         if not vertical_path:
+            if watermark_enabled:
+                fallback_wm_path, fallback_err = _watermark_original_image_with_status(
+                    cfg, image_url, watermark_path, mode="rss", branch="vertical_fallback_original"
+                )
+                if fallback_wm_path:
+                    return str(fallback_wm_path), fallback_wm_path
+                logger.warning("[WM_APPLY_FAIL] branch=vertical_fallback_original reason=%s", fallback_err)
             logger.info("[IMG_FALLBACK_ORIGINAL] reason=%s url=%s", vertical_error or "vertical_transform_failed", image_url)
             return image_url, None
         return str(vertical_path), vertical_path
 
     template_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "template")
     if not template_rel:
+        if watermark_enabled:
+            fallback_wm_path, fallback_err = _watermark_original_image_with_status(
+                cfg, image_url, watermark_path, mode="rss", branch="no_template_original"
+            )
+            if fallback_wm_path:
+                return str(fallback_wm_path), fallback_wm_path
+            logger.warning("[WM_APPLY_FAIL] branch=no_template_original reason=%s", fallback_err)
         return image_url, None
     template_path = BASE_DIR / template_rel
     if not template_path.exists() or not template_path.is_file():
+        if watermark_enabled:
+            fallback_wm_path, fallback_err = _watermark_original_image_with_status(
+                cfg, image_url, watermark_path, mode="rss", branch="template_missing_original"
+            )
+            if fallback_wm_path:
+                return str(fallback_wm_path), fallback_wm_path
+            logger.warning("[WM_APPLY_FAIL] branch=template_missing_original reason=%s", fallback_err)
         return image_url, None
 
-    composed_path, compose_error = _compose_rss_image_with_status(template_path, image_url, watermark_path)
+    logger.info("[WM_BRANCH] branch=template_compose")
+    composed_path, compose_error = _compose_rss_image_with_status(template_path, image_url, watermark_path, cfg=cfg)
     if not composed_path:
+        if watermark_enabled:
+            fallback_wm_path, fallback_err = _watermark_original_image_with_status(
+                cfg, image_url, watermark_path, mode="rss", branch="template_compose_fallback_original"
+            )
+            if fallback_wm_path:
+                return str(fallback_wm_path), fallback_wm_path
+            logger.warning("[WM_APPLY_FAIL] branch=template_compose_fallback_original reason=%s", fallback_err)
         logger.info("[IMG_FALLBACK_ORIGINAL] reason=%s url=%s", compose_error or "template_compose_failed", image_url)
         return image_url, None
     return str(composed_path), composed_path
@@ -2237,15 +2357,25 @@ async def prepare_rss_preview_image_for_sending(bot, cfg: dict, user_id: int, im
     if str(cfg.get("mode") or "").strip().lower() not in ("rss", "both"):
         return image_url, None, None
 
+    watermark_enabled = bool(cfg.get("rss_watermark_file_id"))
+    logger.info("[WM_ENABLED] branch=prepare_preview enabled=%s", watermark_enabled)
     watermark_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "watermark")
     watermark_path = (BASE_DIR / watermark_rel) if watermark_rel else None
     if cfg.get("rss_watermark_file_id") and not watermark_rel:
         logger.info("RSS preview watermark download failed for user %s", user_id)
         return image_url, None, "preview_status_asset_load_failed_normal"
 
-    vertical_path, is_vertical, vertical_error = _compose_vertical_rss_image_with_optional_watermark(image_url, watermark_path)
+    logger.info("[WM_BRANCH] branch=vertical_compose")
+    vertical_path, is_vertical, vertical_error = _compose_vertical_rss_image_with_optional_watermark(image_url, watermark_path, cfg=cfg)
     if is_vertical:
         if not vertical_path:
+            if watermark_enabled:
+                fallback_wm_path, fallback_err = _watermark_original_image_with_status(
+                    cfg, image_url, watermark_path, mode="rss", branch="preview_vertical_fallback_original"
+                )
+                if fallback_wm_path:
+                    return str(fallback_wm_path), fallback_wm_path, None
+                logger.warning("[WM_APPLY_FAIL] branch=preview_vertical_fallback_original reason=%s", fallback_err)
             logger.info("[IMG_FALLBACK_ORIGINAL] reason=%s url=%s", vertical_error or "vertical_transform_failed", image_url)
             return image_url, None, "preview_status_template_build_failed_normal"
         return str(vertical_path), vertical_path, None
@@ -2255,19 +2385,41 @@ async def prepare_rss_preview_image_for_sending(bot, cfg: dict, user_id: int, im
         if cfg.get("rss_template_file_id"):
             logger.info("RSS preview template download failed for user %s", user_id)
             return image_url, None, "preview_status_asset_load_failed_normal"
+        if watermark_enabled:
+            fallback_wm_path, fallback_err = _watermark_original_image_with_status(
+                cfg, image_url, watermark_path, mode="rss", branch="preview_no_template_original"
+            )
+            if fallback_wm_path:
+                return str(fallback_wm_path), fallback_wm_path, None
+            logger.warning("[WM_APPLY_FAIL] branch=preview_no_template_original reason=%s", fallback_err)
         return image_url, None, None
 
     template_path = BASE_DIR / template_rel
     if not template_path.exists() or not template_path.is_file():
         logger.info("RSS preview template file missing for user %s: %s", user_id, template_path)
+        if watermark_enabled:
+            fallback_wm_path, fallback_err = _watermark_original_image_with_status(
+                cfg, image_url, watermark_path, mode="rss", branch="preview_template_missing_original"
+            )
+            if fallback_wm_path:
+                return str(fallback_wm_path), fallback_wm_path, None
+            logger.warning("[WM_APPLY_FAIL] branch=preview_template_missing_original reason=%s", fallback_err)
         return image_url, None, "preview_status_asset_load_failed_normal"
 
-    composed_path, compose_error = _compose_rss_image_with_status(template_path, image_url, watermark_path)
+    logger.info("[WM_BRANCH] branch=template_compose")
+    composed_path, compose_error = _compose_rss_image_with_status(template_path, image_url, watermark_path, cfg=cfg)
     if not composed_path:
+        if watermark_enabled:
+            fallback_wm_path, fallback_err = _watermark_original_image_with_status(
+                cfg, image_url, watermark_path, mode="rss", branch="preview_template_compose_fallback_original"
+            )
+            if fallback_wm_path:
+                return str(fallback_wm_path), fallback_wm_path, None
+            logger.warning("[WM_APPLY_FAIL] branch=preview_template_compose_fallback_original reason=%s", fallback_err)
         if compose_error in {"rss_image_unusable", "rss_image_rejected"}:
             logger.info("[IMG_FALLBACK_ORIGINAL] reason=%s url=%s", compose_error, image_url)
             return image_url, None, "preview_status_template_build_failed_normal"
-        if compose_error in {"template_load_failed", "watermark_load_failed"}:
+        if compose_error in {"template_load_failed", "watermark_apply_failed"}:
             return image_url, None, "preview_status_asset_load_failed_normal"
         return image_url, None, "preview_status_template_build_failed_normal"
 
