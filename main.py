@@ -452,6 +452,8 @@ DEFAULT_CLIENT = {
     "timezone_offset_hours": 0,
     "channel_timezone_offset_hours": None,
     "rss_freshness_minutes": 180,
+    "rss_important_freshness_minutes": 480,
+    "rss_important_keywords": [],
     "rss_candidate_queue": [],
 
     "daily_limit": 10,
@@ -541,6 +543,8 @@ CHANNEL_SCOPED_KEYS = (
     "rss_quiet_hours_windows",
     "creative_quiet_hours_windows",
     "rss_freshness_minutes",
+    "rss_important_freshness_minutes",
+    "rss_important_keywords",
     "rss_candidate_queue",
     "creative_variation_level",
     "creative_post_types",
@@ -1490,9 +1494,8 @@ def collect_rss_candidates(cfg: dict) -> list[dict]:
             title = getattr(e, "title", "Untitled")
             summary = clean_text(_entry_get(e, "summary", "") or _entry_get(e, "description", "") or "")
             published = getattr(e, "published_parsed", None)
-            age_min = candidate_age_minutes_from_published(published, now_utc)
-            logger.info("[CANDIDATE_AGE] feed=%s link=%s age_min=%s", feed_url, link_n, f"{age_min:.1f}" if age_min is not None else "unknown")
-            if not candidate_is_fresh(cfg, published, now_utc, "initial_scan"):
+            is_important, _ = classify_candidate_importance(cfg, title, summary)
+            if not candidate_is_fresh(cfg, published, now_utc, "initial_scan", is_important=is_important):
                 continue
             is_relevant, score = _assess_rss_candidate_relevance(title, summary, published, now_utc)
             if not is_relevant:
@@ -1522,6 +1525,8 @@ def collect_rss_candidates(cfg: dict) -> list[dict]:
                     "link": link_n,
                     "feed_url": feed_url,
                     "identity": _candidate_identity_token(link_n, title),
+                    "summary": summary,
+                    "important": is_important,
                 }
             )
 
@@ -1570,6 +1575,8 @@ def queue_candidate(cfg: dict, candidate: dict, reason: str) -> None:
             "published_at": published_iso,
             "queued_at": datetime.now(timezone.utc).isoformat(),
             "reason": reason,
+            "summary": str(candidate.get("summary") or ""),
+            "important": bool(candidate.get("important", False)),
         }
     )
     cfg["rss_candidate_queue"] = queue[-200:]
@@ -1578,6 +1585,7 @@ def queue_candidate(cfg: dict, candidate: dict, reason: str) -> None:
 
 def _queue_item_is_fresh(cfg: dict, item: dict, now_utc: datetime) -> bool:
     published_raw = str(item.get("published_at") or "").strip()
+    is_important = bool(item.get("important", False))
     if not published_raw:
         return True
     try:
@@ -1585,10 +1593,10 @@ def _queue_item_is_fresh(cfg: dict, item: dict, now_utc: datetime) -> bool:
     except Exception:
         return True
     age_min = max(0.0, (now_utc - published_dt).total_seconds() / 60.0)
-    threshold = rss_freshness_minutes(cfg)
-    logger.info("[FRESHNESS_CHECK] source=queue age_min=%.1f threshold_min=%s", age_min, threshold)
+    threshold = allowed_freshness_threshold(cfg, is_important)
+    logger.info("[CANDIDATE_AGE] source=queue age_min=%.1f threshold_min=%s important=%s", age_min, threshold, is_important)
     if age_min > threshold:
-        logger.info("[CANDIDATE_DROPPED] reason=stale_queue link=%s age_min=%.1f threshold_min=%s", item.get("link"), age_min, threshold)
+        logger.info("[CANDIDATE_SKIPPED_STALE] source=queue link=%s age_min=%.1f threshold_min=%s important=%s", item.get("link"), age_min, threshold, is_important)
         return False
     return True
 
@@ -1601,15 +1609,110 @@ def dequeue_best_candidate(cfg: dict) -> dict | None:
         cfg["rss_candidate_queue"] = fresh_queue
     if not fresh_queue:
         return None
-    fresh_queue.sort(key=lambda x: (int(x.get("score") or 0), str(x.get("published_at") or "")), reverse=True)
+    fresh_queue.sort(key=lambda x: (bool(x.get("important", False)), int(x.get("score") or 0), str(x.get("published_at") or "")), reverse=True)
     best = fresh_queue.pop(0)
     cfg["rss_candidate_queue"] = fresh_queue
-    logger.info("[MULTIFEED_MERGE] stage=queue_pick link=%s", best.get("link"))
+    logger.info("[MULTIFEED_SELECTION] source=queue_pick link=%s important=%s", best.get("link"), bool(best.get("important", False)))
     return {
         "published": None,
         "title": str(best.get("title") or ""),
         "link": str(best.get("link") or ""),
         "feed_url": str(best.get("feed_url") or ""),
+        "summary": str(best.get("summary") or ""),
+        "important": bool(best.get("important", False)),
+        "score": int(best.get("score") or 0),
+        "identity": str(best.get("identity") or ""),
+    }
+
+
+def pick_best_candidate_for_cycle(cfg: dict, merged_candidates: list[dict], blocked_now: bool) -> dict | None:
+    now_utc = datetime.now(timezone.utc)
+    combined: list[dict] = []
+
+    for queued in _queue_items(cfg):
+        if _queue_item_is_fresh(cfg, queued, now_utc):
+            combined.append(dict(queued))
+
+    for candidate in merged_candidates:
+        identity = str(candidate.get("identity") or _candidate_identity_token(str(candidate.get("link") or ""), str(candidate.get("title") or "")))
+        published = candidate.get("published")
+        published_iso = _entry_time_iso({"published_parsed": published}) if published else ""
+        combined.append(
+            {
+                "identity": identity,
+                "link": str(candidate.get("link") or ""),
+                "title": str(candidate.get("title") or ""),
+                "feed_url": str(candidate.get("feed_url") or ""),
+                "score": int(candidate.get("score") or 0),
+                "published_at": published_iso,
+                "summary": str(candidate.get("summary") or ""),
+                "important": bool(candidate.get("important", False)),
+                "reason": "fresh_scan",
+                "published": published,
+            }
+        )
+
+    deduped: dict[str, dict] = {}
+    for item in combined:
+        token = str(item.get("identity") or "")
+        prev = deduped.get(token)
+        if not prev or (bool(item.get("important", False)), int(item.get("score") or 0), str(item.get("published_at") or "")) > (
+            bool(prev.get("important", False)),
+            int(prev.get("score") or 0),
+            str(prev.get("published_at") or ""),
+        ):
+            deduped[token] = item
+
+    valid_items: list[dict] = []
+    for item in deduped.values():
+        published_struct = item.get("published")
+        if published_struct is None and item.get("published_at"):
+            try:
+                dt = datetime.fromisoformat(str(item.get("published_at")).replace("Z", "+00:00"))
+                published_struct = dt.utctimetuple()
+            except Exception:
+                published_struct = None
+        if candidate_is_fresh(cfg, published_struct, now_utc, "cycle_eval", is_important=bool(item.get("important", False))):
+            valid_items.append(item)
+
+    valid_items.sort(
+        key=lambda x: (bool(x.get("important", False)), int(x.get("score") or 0), str(x.get("published_at") or ""), str(x.get("title") or "")),
+        reverse=True,
+    )
+    logger.info(
+        "[MULTIFEED_SELECTION] blocked=%s incoming=%s deduped=%s valid=%s",
+        blocked_now,
+        len(merged_candidates),
+        len(deduped),
+        len(valid_items),
+    )
+
+    if blocked_now:
+        cfg["rss_candidate_queue"] = valid_items[-200:]
+        logger.info("[BLOCKED_HOURS_ACTIVE] queued=%s", len(valid_items))
+        return None
+
+    if not valid_items:
+        cfg["rss_candidate_queue"] = []
+        return None
+
+    winner = valid_items[0]
+    leftovers = valid_items[1:]
+    cfg["rss_candidate_queue"] = leftovers[-200:]
+    logger.info(
+        "[MULTIFEED_SELECTION] winner=%s important=%s score=%s leftovers=%s",
+        winner.get("link"),
+        bool(winner.get("important", False)),
+        int(winner.get("score") or 0),
+        len(leftovers),
+    )
+    return {
+        "published": winner.get("published"),
+        "title": str(winner.get("title") or ""),
+        "link": str(winner.get("link") or ""),
+        "feed_url": str(winner.get("feed_url") or ""),
+        "summary": str(winner.get("summary") or ""),
+        "important": bool(winner.get("important", False)),
     }
 
 def extract_summary_for_link(feed_url: str, link_normalized: str, limit: int = 20) -> str:
@@ -3682,13 +3785,15 @@ def ensure_channel_timezone(cfg: dict, channel: str | None = None) -> tuple[int,
     raw_legacy = cfg.get("timezone_offset_hours", 0)
     try:
         inferred = int(raw_legacy)
+        parsed_ok = True
     except (TypeError, ValueError):
         inferred = 0
+        parsed_ok = False
     inferred = max(-12, min(14, inferred))
     cfg["channel_timezone_offset_hours"] = inferred
     if channel and current != channel:
         switch_active_channel(cfg, current)
-    reason = "legacy_global" if isinstance(raw_legacy, int) else "fallback_utc"
+    reason = "legacy_global" if parsed_ok else "fallback_utc"
     logger.info("[CHANNEL_TIMEZONE] action=autodetect reason=%s value=%s channel=%s", reason, inferred, channel or cfg.get("channel"))
     return inferred, reason
 
@@ -3748,6 +3853,7 @@ def is_blocked_now(cfg: dict, mode: str, now: datetime) -> bool:
         start_dt, end_dt = _quiet_window_for_day(start_hm, end_hm, now)
         if start_dt <= now < end_dt:
             logger.info("[BLOCKED_HOURS_CHECK] mode=%s blocked=true now=%s window=%s-%s", mode, now.isoformat(timespec="minutes"), start, end)
+            logger.info("[BLOCKED_HOURS_ACTIVE] mode=%s window=%s-%s", mode, start, end)
             return True
     logger.info("[BLOCKED_HOURS_CHECK] mode=%s blocked=false now=%s", mode, now.isoformat(timespec="minutes"))
     return False
@@ -3762,6 +3868,55 @@ def rss_freshness_minutes(cfg: dict) -> int:
     return max(15, min(1440, value))
 
 
+IMPORTANT_KEYWORDS_DEFAULT = [
+    "injury", "official", "confirmed", "transfer", "signed", "contract", "surgery",
+    "suspended", "lineup", "starting xi", "breaking",
+    "травм", "официал", "подтвержд", "трансфер", "подписал", "контракт", "операц", "дисквалиф",
+    "состав", "стартов", "срочно",
+    "lesión", "oficial", "confirmado", "fichaje", "firmó", "contrato", "cirugía",
+    "suspendido", "alineación", "once inicial", "última hora",
+]
+
+
+def rss_important_freshness_minutes(cfg: dict) -> int:
+    raw = cfg.get("rss_important_freshness_minutes", 480)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 480
+    normal = rss_freshness_minutes(cfg)
+    return max(normal, min(2880, value))
+
+
+def important_keywords(cfg: dict) -> list[str]:
+    configured = cfg.get("rss_important_keywords")
+    if isinstance(configured, list):
+        values = [str(x).strip().lower() for x in configured if str(x).strip()]
+        if values:
+            return values
+    return IMPORTANT_KEYWORDS_DEFAULT
+
+
+def classify_candidate_importance(cfg: dict, title: str, summary: str) -> tuple[bool, list[str]]:
+    haystack = f"{clean_text(title).lower()} {clean_text(summary).lower()}"
+    hits: list[str] = []
+    for keyword in important_keywords(cfg):
+        if keyword and keyword in haystack:
+            hits.append(keyword)
+    is_important = bool(hits)
+    logger.info(
+        "[CANDIDATE_IMPORTANCE] important=%s hits=%s title=%s",
+        is_important,
+        ",".join(hits[:8]) if hits else "-",
+        clean_text(title)[:140],
+    )
+    return is_important, hits
+
+
+def allowed_freshness_threshold(cfg: dict, is_important: bool) -> int:
+    return rss_important_freshness_minutes(cfg) if is_important else rss_freshness_minutes(cfg)
+
+
 def candidate_age_minutes_from_published(published_struct, now_utc: datetime) -> float | None:
     if not published_struct:
         return None
@@ -3773,14 +3928,20 @@ def candidate_age_minutes_from_published(published_struct, now_utc: datetime) ->
     return max(0.0, age.total_seconds() / 60.0)
 
 
-def candidate_is_fresh(cfg: dict, published_struct, now_utc: datetime, source: str) -> bool:
+def candidate_is_fresh(cfg: dict, published_struct, now_utc: datetime, source: str, *, is_important: bool = False) -> bool:
     age_min = candidate_age_minutes_from_published(published_struct, now_utc)
-    threshold = rss_freshness_minutes(cfg)
-    logger.info("[FRESHNESS_CHECK] source=%s age_min=%s threshold_min=%s", source, f"{age_min:.1f}" if age_min is not None else "unknown", threshold)
+    threshold = allowed_freshness_threshold(cfg, is_important)
+    logger.info(
+        "[CANDIDATE_AGE] source=%s age_min=%s threshold_min=%s important=%s",
+        source,
+        f"{age_min:.1f}" if age_min is not None else "unknown",
+        threshold,
+        is_important,
+    )
     if age_min is None:
         return True
     if age_min > threshold:
-        logger.info("[CANDIDATE_SKIPPED_STALE] source=%s age_min=%.1f threshold_min=%s", source, age_min, threshold)
+        logger.info("[CANDIDATE_SKIPPED_STALE] source=%s age_min=%.1f threshold_min=%s important=%s", source, age_min, threshold, is_important)
         return False
     return True
 
@@ -4162,7 +4323,27 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
         return channels[0], None
 
     if action in {"creative_menu", "rss_menu"}:
-        clear_mode_channel_selection(context)
+        selected_channel = context.user_data.get("mode_selected_channel")
+        if isinstance(selected_channel, str) and selected_channel in channels:
+            logger.info("[NAV_PARENT] action=%s resolved=selected_channel channel=%s", action, selected_channel)
+            context.user_data["active_channel_idx"] = channels.index(selected_channel)
+            switch_active_channel(cfg, selected_channel)
+            return selected_channel, None
+        idx = context.user_data.get("active_channel_idx")
+        if isinstance(idx, int) and 0 <= idx < len(channels):
+            selected_channel = channels[idx]
+            logger.info("[NAV_PARENT] action=%s resolved=active_channel_idx channel=%s", action, selected_channel)
+            set_mode_channel_selection(context, selected_channel)
+            switch_active_channel(cfg, selected_channel)
+            return selected_channel, None
+        current_channel = cfg.get("channel")
+        if isinstance(current_channel, str) and current_channel in channels:
+            logger.info("[NAV_PARENT] action=%s resolved=current_channel channel=%s", action, current_channel)
+            set_mode_channel_selection(context, current_channel)
+            context.user_data["active_channel_idx"] = channels.index(current_channel)
+            switch_active_channel(cfg, current_channel)
+            return current_channel, None
+        logger.info("[NAV_PARENT] action=%s resolved=pick_required", action)
         return None, "pick"
 
     explicit_selection_actions = {
@@ -4333,6 +4514,25 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user_id = q.from_user.id
     cfg = load_client(user_id)
     data = q.data or ""
+    if data in {
+        "ui:setup",
+        "ui:modes",
+        "ui:backmain",
+        "ui:mode:rss:menu",
+        "ui:mode:creative:menu",
+        "ui:creative:contentplan",
+        "ui:creative:sources",
+        "ui:creative:variety",
+        "ui:creative:visual",
+        "ui:rss:feeds",
+        "ui:rss:output",
+        "ui:creative:output",
+        "ui:schedule:rss:menu",
+        "ui:schedule:creative:menu",
+        "ui:schedule:rss:quiet",
+        "ui:schedule:creative:quiet",
+    }:
+        logger.info("[NAV_BACK] callback=%s selected_channel=%s", data, context.user_data.get("mode_selected_channel"))
 
     if data == "ui:lang":
         await q.answer()
@@ -6673,6 +6873,7 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         meta[channel] = merged_meta
         cfg["channel_meta"] = meta
         switch_active_channel(cfg, channel)
+        ensure_channel_timezone(cfg, channel)
         save_client(user_id, cfg)
         context.user_data["active_channel_idx"] = existing_idx
         context.user_data.pop("awaiting_channel_forward", None)
@@ -6999,7 +7200,6 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(ui_text(cfg, "timezone_invalid"))
             return
         cfg["channel_timezone_offset_hours"] = offset
-        cfg["timezone_offset_hours"] = offset
         save_client(user_id, cfg)
         context.user_data.pop("awaiting_timezone", None)
         context.user_data.pop("awaiting_timezone_mode", None)
@@ -7723,17 +7923,11 @@ async def autopost_loop(app: Application) -> None:
                         continue
 
                     merged_candidates = collect_rss_candidates(cfg) if feeds else []
-                    best = None
-                    if merged_candidates:
-                        primary = merged_candidates[0]
-                        best = (primary["published"], primary["title"], primary["link"], primary["feed_url"])
-                        for extra in merged_candidates[1:]:
-                            queue_candidate(cfg, extra, reason="multifeed_leftover")
                     rss_enabled = mode_autopost_enabled(cfg, "rss")
                     rss_paused = rss_posting_paused(cfg)
                     creative_enabled = mode_autopost_enabled(cfg, "creative")
 
-                    if mode == "both" and not best:
+                    if mode == "both" and not merged_candidates and not _queue_items(cfg):
                         if not creative_enabled:
                             continue
                         if should_log_diag(user_id, "no_fresh_rss_items", now):
@@ -7749,7 +7943,7 @@ async def autopost_loop(app: Application) -> None:
                         last_post_at[(user_id, channel, "creative")] = now
                         continue
 
-                    if mode == "both" and best and (not rss_enabled or rss_paused):
+                    if mode == "both" and (merged_candidates or _queue_items(cfg)) and (not rss_enabled or rss_paused):
                         if not creative_enabled:
                             continue
                         if not should_run_mode_now(cfg, "creative", now, last_post_at, user_id, channel):
@@ -7763,7 +7957,7 @@ async def autopost_loop(app: Application) -> None:
                         last_post_at[(user_id, channel, "creative")] = now
                         continue
 
-                    if not best:
+                    if not merged_candidates and not _queue_items(cfg):
                         if should_log_diag(user_id, "no_fresh_rss_items", now):
                             logger.info("[autopost] user=%s mode=rss: no fresh RSS items (feed has no new entries or all were deduped)", user_id)
                         continue
@@ -7776,35 +7970,21 @@ async def autopost_loop(app: Application) -> None:
                         continue
 
                     blocked_now = is_blocked_now(cfg, "rss", now)
-                    queue_pick = dequeue_best_candidate(cfg)
-                    candidate: dict | None = None
-                    if queue_pick:
-                        candidate = queue_pick
-                    elif best:
-                        published, title, link, src = best
-                        candidate = {"published": published, "title": title, "link": link, "feed_url": src}
+                    candidate = pick_best_candidate_for_cycle(cfg, merged_candidates, blocked_now)
                     if not candidate:
+                        if blocked_now:
+                            logger.info("[CANDIDATE_SKIPPED_BLOCKED] channel=%s reason=blocked_hours_active", channel)
+                            mark_mode_scheduled(cfg, "rss", now)
+                            save_client(user_id, cfg)
                         continue
 
-                    if blocked_now:
-                        queue_candidate(
-                            cfg,
-                            {
-                                "published": candidate.get("published"),
-                                "title": candidate.get("title"),
-                                "link": candidate.get("link"),
-                                "feed_url": candidate.get("feed_url"),
-                                "score": 1,
-                                "identity": _candidate_identity_token(str(candidate.get("link") or ""), str(candidate.get("title") or "")),
-                            },
-                            reason="blocked_hours",
-                        )
-                        logger.info("[CANDIDATE_SKIPPED_BLOCKED] channel=%s link=%s", channel, candidate.get("link"))
-                        mark_mode_scheduled(cfg, "rss", now)
-                        save_client(user_id, cfg)
-                        continue
-
-                    if not candidate_is_fresh(cfg, candidate.get("published"), datetime.now(timezone.utc), "pre_post"):
+                    if not candidate_is_fresh(
+                        cfg,
+                        candidate.get("published"),
+                        datetime.now(timezone.utc),
+                        "pre_post",
+                        is_important=bool(candidate.get("important", False)),
+                    ):
                         logger.info("[CANDIDATE_SKIPPED_STALE] channel=%s link=%s", channel, candidate.get("link"))
                         mark_mode_scheduled(cfg, "rss", now)
                         save_client(user_id, cfg)
