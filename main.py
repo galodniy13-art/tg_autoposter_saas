@@ -55,6 +55,7 @@ from keyboards import (
     build_mode_schedule_menu,
     build_prompt_builder_review_menu,
     build_copy_style_review_menu,
+    build_style_setup_menu,
 )
 
 from texts import TEXTS as UI_TEXTS
@@ -878,6 +879,15 @@ def prompt_key_for_mode(mode: str) -> str:
 
 def set_mode_prompt(cfg: dict, mode: str, prompt: str) -> None:
     cfg[prompt_key_for_mode(mode)] = prompt
+
+
+def style_setup_text(user_id: int, cfg: dict, mode: str) -> str:
+    current = get_mode_prompt(user_id, cfg, mode).strip()
+    if current:
+        preview = ui_text(cfg, "style_setup_current_prefix").format(prompt=current[:1500])
+    else:
+        preview = ui_text(cfg, "style_setup_empty")
+    return f"{ui_text(cfg, 'style_setup_title')}\n\n{preview}"
 
 def sanitize_llm_post(text: str, cfg: dict, link: str) -> str:
     t = (text or "").replace("\r", "").strip()
@@ -3112,6 +3122,11 @@ def build_rss_submenu(cfg: dict) -> InlineKeyboardMarkup:
     return build_rss_ai_menu(ui_pack(cfg), rss_posting_paused(cfg))
 
 
+def build_style_setup_submenu(cfg: dict, mode: str) -> InlineKeyboardMarkup:
+    back_callback = "ui:mode:creative:menu" if mode == "creative" else "ui:mode:rss:menu"
+    return build_style_setup_menu(ui_pack(cfg), mode, back_callback)
+
+
 def build_rss_output_submenu(cfg: dict) -> InlineKeyboardMarkup:
     return build_rss_output_menu(
         ui_pack(cfg),
@@ -4107,7 +4122,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.message.reply_text(text, reply_markup=build_rss_submenu(cfg))
             return
         if action in ("creative_editprompt", "rss_editprompt"):
-            mapped = "ui:creative:editprompt" if action == "creative_editprompt" else "ui:rss:editprompt"
+            mapped = "ui:creative:stylemenu" if action == "creative_editprompt" else "ui:rss:stylemenu"
             q.data = mapped
         elif action in ("creative_buildprompt", "rss_buildprompt"):
             mapped = "ui:creative:buildprompt" if action == "creative_buildprompt" else "ui:rss:buildprompt"
@@ -5698,6 +5713,76 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 + ui_text(cfg, "prompt_edit_cancel_hint")
             )
             return
+
+    if data.startswith("ui:stylemenu:"):
+        parts = data.split(":")
+        if len(parts) != 4:
+            await q.answer()
+            return
+        mode = parts[2]
+        action = parts[3]
+        if action != "save" or mode not in ("creative", "rss"):
+            await q.answer()
+            return
+        selected_channel = (context.user_data.get("awaiting_prompt_channel") or "").strip()
+        if selected_channel:
+            switch_active_channel(cfg, selected_channel)
+        current = get_mode_prompt(user_id, cfg, mode).strip()
+        if current:
+            set_mode_prompt(cfg, mode, current)
+            save_client(user_id, cfg)
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "style_setup_saved"),
+            reply_markup=build_style_setup_submenu(cfg, mode),
+        )
+        return
+
+    if data == "ui:creative:stylemenu":
+        if not await enforce_mode_paywall(update, cfg, "creator"):
+            return
+        selected, state = require_channel_context(cfg, context, "creative_editprompt")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_editprompt", "ui:mode:creative:menu"),
+            )
+            return
+        context.user_data["awaiting_prompt_channel"] = selected
+        await q.answer()
+        await q.message.reply_text(
+            selected_channel_text(cfg, selected) + "\n\n" + style_setup_text(user_id, cfg, "creative"),
+            reply_markup=build_style_setup_submenu(cfg, "creative"),
+        )
+        return
+
+    if data == "ui:rss:stylemenu":
+        if not await enforce_mode_paywall(update, cfg, "rss"):
+            return
+        selected, state = require_channel_context(cfg, context, "rss_editprompt")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "rss_editprompt", "ui:mode:rss:menu"),
+            )
+            return
+        context.user_data["awaiting_prompt_channel"] = selected
+        await q.answer()
+        await q.message.reply_text(
+            selected_channel_text(cfg, selected) + "\n\n" + style_setup_text(user_id, cfg, "rss"),
+            reply_markup=build_style_setup_submenu(cfg, "rss"),
+        )
+        return
 
     if data == "ui:creative:copystyle":
         if not await enforce_mode_paywall(update, cfg, "creator"):
