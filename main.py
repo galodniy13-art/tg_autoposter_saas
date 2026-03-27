@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -1887,20 +1888,21 @@ def _download_image_to_tempfile(image_url: str, marker: str = "normal") -> tuple
         return None, "download_or_decode_failed"
 
 
-def _watermark_ratios(cfg: dict, mode: str = "rss") -> tuple[float, float]:
-    scale_pct = cfg.get(f"{mode}_watermark_scale_pct", 15.0)
-    margin_pct = cfg.get(f"{mode}_watermark_margin_pct", 4.0)
+def _watermark_ratios(cfg: dict, mode: str = "rss") -> tuple[float, float, float]:
+    scale_pct = cfg.get(f"{mode}_watermark_scale_pct", 12.0)
+    margin_pct = cfg.get(f"{mode}_watermark_margin_pct", 3.5)
     try:
         scale_ratio = float(scale_pct) / 100.0
     except (TypeError, ValueError):
-        scale_ratio = 0.18
+        scale_ratio = 0.12
     try:
         margin_ratio = float(margin_pct) / 100.0
     except (TypeError, ValueError):
         margin_ratio = 0.035
-    scale_ratio = min(0.18, max(0.12, scale_ratio))
-    margin_ratio = min(0.05, max(0.03, margin_ratio))
-    return scale_ratio, margin_ratio
+    scale_ratio = min(0.14, max(0.09, scale_ratio))
+    margin_ratio = min(0.06, max(0.025, margin_ratio))
+    margin_y_ratio = min(0.07, max(0.025, margin_ratio * 1.1))
+    return scale_ratio, margin_ratio, margin_y_ratio
 
 
 def _apply_watermark_to_canvas(
@@ -1910,57 +1912,60 @@ def _apply_watermark_to_canvas(
     mode: str = "rss",
     branch: str = "unknown",
 ) -> bool:
-    logger.info("[WM_APPLY_START] branch=%s", branch)
+    logger.info("[WM_ENABLED] branch=%s enabled=%s", branch, bool(watermark_path))
     if not watermark_path or not watermark_path.exists() or not watermark_path.is_file():
-        logger.warning("[WM_FAIL] branch=%s reason=watermark_file_missing path=%s", branch, watermark_path)
+        logger.warning("[WM_APPLY_FAIL] branch=%s reason=watermark_file_missing path=%s", branch, watermark_path)
         return False
     try:
         wm = Image.open(watermark_path).convert("RGBA")
         canvas_w, canvas_h = canvas.size
-        logger.info(
-            "[WM_IMAGE_SIZE] branch=%s canvas_width=%s canvas_height=%s watermark_source_width=%s watermark_source_height=%s",
-            branch,
-            canvas_w,
-            canvas_h,
-            wm.width,
-            wm.height,
-        )
+        logger.info("[CANVAS_SIZE] branch=%s width=%s height=%s", branch, canvas_w, canvas_h)
 
-        scale_ratio, margin_ratio = _watermark_ratios(cfg, mode)
+        scale_ratio, margin_x_ratio, margin_y_ratio = _watermark_ratios(cfg, mode)
         target_w = max(24, int(canvas_w * scale_ratio))
-        target_w = min(target_w, max(24, int(canvas_w * 0.18)))
+        target_w = min(target_w, max(24, int(canvas_w * 0.16)))
         target_h = max(1, int(target_w * (wm.height / max(1, wm.width))))
+        max_h = max(16, int(canvas_h * 0.18))
+        if target_h > max_h:
+            adjust = max_h / max(1, target_h)
+            target_h = max(1, int(target_h * adjust))
+            target_w = max(1, int(target_w * adjust))
         wm_resized = wm.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
-        margin_x = max(4, int(canvas_w * margin_ratio))
-        margin_y = max(4, int(canvas_h * margin_ratio))
+        margin_x = max(4, int(canvas_w * margin_x_ratio))
+        margin_y = max(4, int(canvas_h * margin_y_ratio))
         pos_x = canvas_w - wm_resized.width - margin_x
         pos_y = canvas_h - wm_resized.height - margin_y
         pos_x = max(0, pos_x)
         pos_y = max(0, pos_y)
 
         logger.info(
-            "[WM_SCALE] branch=%s ratio=%.4f target_width=%s target_height=%s",
+            "[WM_SCALE] branch=%s width_ratio=%.4f target_width=%s target_height=%s",
             branch,
             scale_ratio,
             wm_resized.width,
             wm_resized.height,
         )
         logger.info(
-            "[WM_POSITION] branch=%s corner=bottom_right x=%s y=%s margin_x=%s margin_y=%s margin_ratio=%.4f",
+            "[WM_MARGIN] branch=%s margin_x=%s margin_y=%s margin_x_ratio=%.4f margin_y_ratio=%.4f",
+            branch,
+            margin_x,
+            margin_y,
+            margin_x_ratio,
+            margin_y_ratio,
+        )
+        logger.info(
+            "[WM_POSITION] branch=%s corner=bottom_right x=%s y=%s",
             branch,
             pos_x,
             pos_y,
-            margin_x,
-            margin_y,
-            margin_ratio,
         )
 
         canvas.paste(wm_resized, (pos_x, pos_y), wm_resized)
-        logger.info("[WM_APPLIED] branch=%s", branch)
+        logger.info("[WM_APPLY_OK] branch=%s", branch)
         return True
     except Exception as exc:
-        logger.warning("[WM_FAIL] branch=%s reason=%s", branch, exc)
+        logger.warning("[WM_APPLY_FAIL] branch=%s reason=%s", branch, exc)
         return False
 
 
@@ -1971,6 +1976,7 @@ def _watermark_original_image_with_status(
     mode: str = "rss",
     branch: str = "original_fallback",
 ) -> tuple[Path | None, str | None]:
+    logger.info("[IMG_BRANCH] branch=%s", branch)
     downloaded_path, err = _download_image_to_tempfile(image_url, marker="wm_original")
     if not downloaded_path:
         return None, err or "source_download_failed"
@@ -1988,12 +1994,16 @@ def _watermark_original_image_with_status(
         except Exception:
             pass
 
+    logger.info("[CANVAS_SIZE] branch=%s width=%s height=%s", branch, img.width, img.height)
+    logger.info("[SRC_IMAGE_SIZE] branch=%s width=%s height=%s", branch, img.width, img.height)
+    logger.info("[FIT_MODE] branch=%s mode=source_original", branch)
     if not _apply_watermark_to_canvas(img, watermark_path, cfg, mode=mode, branch=branch):
-        logger.warning("[WM_FAIL] branch=%s reason=watermark_apply_failed_fallback_to_unwatermarked", branch)
+        logger.warning("[WM_APPLY_FAIL] branch=%s reason=watermark_apply_failed_fallback_to_unwatermarked", branch)
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             temp_path = Path(tmp.name)
         img.convert("RGB").save(temp_path, format="JPEG", quality=92, optimize=True)
+        logger.info("[FINAL_RENDER_OK] branch=%s output=%s", branch, temp_path)
         return temp_path, None
     except Exception as exc:
         return None, f"save_failed:{exc}"
@@ -2300,6 +2310,7 @@ def _compose_rss_image_with_status(
     watermark_path: Path | None = None,
     cfg: dict | None = None,
 ) -> tuple[Path | None, str | None]:
+    logger.info("[IMG_BRANCH] branch=template_compose")
     logger.info("[IMG_PROCESS_START] stage=template_compose url=%s", rss_image_url)
     base = None
     rss_img = None
@@ -2337,11 +2348,19 @@ def _compose_rss_image_with_status(
         area_w = max(1, canvas_w - 2 * margin_x)
         area_h = max(1, canvas_h - 2 * margin_y)
 
-        source_ratio = rss_img.width / max(1, rss_img.height)
-        if source_ratio < 0.75:
-            return None, "rss_image_rejected"
+        logger.info("[CANVAS_SIZE] branch=template_compose width=%s height=%s", canvas_w, canvas_h)
+        logger.info("[SRC_IMAGE_SIZE] branch=template_compose width=%s height=%s", rss_img.width, rss_img.height)
 
-        if source_ratio >= 0.95 and source_ratio <= 1.9:
+        source_ratio = rss_img.width / max(1, rss_img.height)
+        area_ratio = area_w / max(1, area_h)
+        ratio_delta = abs(math.log(max(0.01, source_ratio / max(0.01, area_ratio))))
+        if 0.9 <= source_ratio <= 1.9 and ratio_delta < 0.22:
+            fit_mode = "cover"
+        else:
+            fit_mode = "contain"
+        logger.info("[FIT_MODE] branch=template_compose mode=%s source_ratio=%.4f area_ratio=%.4f", fit_mode, source_ratio, area_ratio)
+
+        if fit_mode == "cover":
             scale = max(area_w / max(1, rss_img.width), area_h / max(1, rss_img.height))
             fitted_w = max(1, int(rss_img.width * scale))
             fitted_h = max(1, int(rss_img.height * scale))
@@ -2354,21 +2373,19 @@ def _compose_rss_image_with_status(
             scale = min(area_w / max(1, rss_img.width), area_h / max(1, rss_img.height))
             fitted_w = max(1, int(rss_img.width * scale))
             fitted_h = max(1, int(rss_img.height * scale))
-            filled_area = (fitted_w * fitted_h) / max(1, area_w * area_h)
-            if filled_area < 0.62:
-                return None, "rss_image_rejected"
             fitted = rss_img.resize((fitted_w, fitted_h), Image.Resampling.LANCZOS)
         paste_x = margin_x + max(0, (area_w - fitted_w) // 2)
         paste_y = margin_y + max(0, (area_h - fitted_h) // 2)
         base.paste(fitted, (paste_x, paste_y), fitted)
 
         if watermark_path and not _apply_watermark_to_canvas(base, watermark_path, cfg or {}, mode="rss", branch="template_compose"):
-            logger.warning("[WM_FAIL] branch=template_compose reason=watermark_apply_failed_fallback_to_unwatermarked")
+            logger.warning("[WM_APPLY_FAIL] branch=template_compose reason=watermark_apply_failed_fallback_to_unwatermarked")
 
         composed = base.convert("RGB")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             temp_path = Path(tmp.name)
         composed.save(temp_path, format="JPEG", quality=92, optimize=True)
+        logger.info("[FINAL_RENDER_OK] branch=template_compose output=%s", temp_path)
         logger.info("[IMG_PROCESS_OK] stage=template_compose output=%s", temp_path)
         return temp_path, None
     except Exception as exc:
@@ -2391,6 +2408,7 @@ def _compose_vertical_rss_image_with_optional_watermark(
     watermark_path: Path | None = None,
     cfg: dict | None = None,
 ) -> tuple[Path | None, bool, str | None]:
+    logger.info("[IMG_BRANCH] branch=vertical_compose")
     logger.info("[IMG_PROCESS_START] stage=vertical_compose url=%s", rss_image_url)
     downloaded_path, _ = _download_image_to_tempfile(rss_image_url, marker="compose_vertical")
     if not downloaded_path:
@@ -2417,12 +2435,16 @@ def _compose_vertical_rss_image_with_optional_watermark(
         return None, True, "rss_image_rejected"
 
     try:
+        logger.info("[CANVAS_SIZE] branch=vertical_compose width=%s height=%s", rss_img.width, rss_img.height)
+        logger.info("[SRC_IMAGE_SIZE] branch=vertical_compose width=%s height=%s", rss_img.width, rss_img.height)
+        logger.info("[FIT_MODE] branch=vertical_compose mode=source_original")
         if watermark_path and not _apply_watermark_to_canvas(rss_img, watermark_path, cfg or {}, mode="rss", branch="vertical_compose"):
-            logger.warning("[WM_FAIL] branch=vertical_compose reason=watermark_apply_failed_fallback_to_unwatermarked")
+            logger.warning("[WM_APPLY_FAIL] branch=vertical_compose reason=watermark_apply_failed_fallback_to_unwatermarked")
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             temp_path = Path(tmp.name)
         rss_img.convert("RGB").save(temp_path, format="JPEG", quality=92, optimize=True)
+        logger.info("[FINAL_RENDER_OK] branch=vertical_compose output=%s", temp_path)
         logger.info("[IMG_PROCESS_OK] stage=vertical_compose output=%s", temp_path)
         return temp_path, True, None
     except Exception as exc:
@@ -2443,6 +2465,8 @@ async def prepare_rss_image_for_sending(bot, cfg: dict, user_id: int, image_url:
     logger.info("[WM_ENABLED] branch=prepare_send enabled=%s", watermark_enabled)
     watermark_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "watermark")
     watermark_path = (BASE_DIR / watermark_rel) if watermark_rel else None
+    if watermark_enabled and not watermark_path:
+        logger.warning("[WM_APPLY_FAIL] branch=prepare_send reason=watermark_enabled_but_asset_unavailable")
     logger.info("[WM_BRANCH] branch=vertical_compose")
     vertical_path, is_vertical, vertical_error = _compose_vertical_rss_image_with_optional_watermark(image_url, watermark_path, cfg=cfg)
     if is_vertical:
@@ -2507,6 +2531,8 @@ async def prepare_rss_preview_image_for_sending(bot, cfg: dict, user_id: int, im
     logger.info("[WM_ENABLED] branch=prepare_preview enabled=%s", watermark_enabled)
     watermark_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "watermark")
     watermark_path = (BASE_DIR / watermark_rel) if watermark_rel else None
+    if watermark_enabled and not watermark_path:
+        logger.warning("[WM_APPLY_FAIL] branch=prepare_preview reason=watermark_enabled_but_asset_unavailable")
     if cfg.get("rss_watermark_file_id") and not watermark_rel:
         logger.info("RSS preview watermark download failed for user %s", user_id)
         return image_url, None, "preview_status_asset_load_failed_normal"
