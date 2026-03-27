@@ -77,15 +77,13 @@ def build_modes_menu(labels: dict) -> InlineKeyboardMarkup:
 def build_creative_menu(labels: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton(labels["btn_edit_prompt"], callback_data="ui:creative:editprompt")],
-            [InlineKeyboardButton(labels["btn_build_prompt_ai"], callback_data="ui:creative:buildprompt")],
+            [InlineKeyboardButton(labels["btn_edit_prompt"], callback_data="ui:creative:stylemenu")],
             [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:creative:preview")],
             [InlineKeyboardButton(labels["btn_content_plan"], callback_data="ui:creative:contentplan")],
             [InlineKeyboardButton(labels["btn_source_center"], callback_data="ui:creative:sources")],
             [InlineKeyboardButton(labels["btn_content_variety"], callback_data="ui:creative:variety")],
             [InlineKeyboardButton(labels["btn_visual_support"], callback_data="ui:creative:visual")],
             [InlineKeyboardButton(labels["btn_scheduling"], callback_data="ui:schedule:creative:menu")],
-            [InlineKeyboardButton(labels["btn_copy_my_style"], callback_data="ui:creative:copystyle")],
             [InlineKeyboardButton(labels["btn_post_format"], callback_data="ui:creative:output")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:modes")],
         ]
@@ -130,11 +128,7 @@ def build_rss_ai_menu(labels: dict, rss_paused: bool = False) -> InlineKeyboardM
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(labels["btn_edit_prompt"], callback_data="ui:rss:editprompt"),
-                InlineKeyboardButton(labels["btn_build_prompt_ai"], callback_data="ui:rss:buildprompt"),
-            ],
-            [
-                InlineKeyboardButton(labels["btn_copy_my_style"], callback_data="ui:rss:copystyle"),
+                InlineKeyboardButton(labels["btn_edit_prompt"], callback_data="ui:rss:stylemenu"),
                 InlineKeyboardButton(labels["btn_edit_feeds"], callback_data="ui:rss:feeds"),
             ],
             [
@@ -163,6 +157,17 @@ def build_copy_style_review_menu(labels: dict, mode: str) -> InlineKeyboardMarku
         [
             [InlineKeyboardButton(labels["btn_save"], callback_data=f"ui:copystyle:{mode}:save")],
             [InlineKeyboardButton(labels["btn_edit"], callback_data=f"ui:copystyle:{mode}:edit")],
+        ]
+    )
+
+
+def build_style_setup_menu(labels: dict, mode: str, back_callback: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(labels["btn_copy_my_style"], callback_data=f"ui:{mode}:copystyle")],
+            [InlineKeyboardButton(labels["btn_save"], callback_data=f"ui:stylemenu:{mode}:save")],
+            [InlineKeyboardButton(labels["btn_edit"], callback_data=f"ui:{mode}:editprompt")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data=back_callback)],
         ]
     )
 
