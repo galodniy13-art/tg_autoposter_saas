@@ -405,8 +405,8 @@ DEFAULT_CLIENT = {
     "rss_template_image_path": "",
     "rss_watermark_file_id": "",
     "rss_watermark_image_path": "",
-    "rss_watermark_scale_pct": 18.0,
-    "rss_watermark_margin_pct": 3.5,
+    "rss_watermark_scale_pct": 15.0,
+    "rss_watermark_margin_pct": 4.0,
     "creative_template_file_id": "",
     "creative_template_image_path": "",
     "creative_watermark_file_id": "",
@@ -1774,8 +1774,8 @@ def _download_image_to_tempfile(image_url: str, marker: str = "normal") -> tuple
 
 
 def _watermark_ratios(cfg: dict, mode: str = "rss") -> tuple[float, float]:
-    scale_pct = cfg.get(f"{mode}_watermark_scale_pct", 18.0)
-    margin_pct = cfg.get(f"{mode}_watermark_margin_pct", 3.5)
+    scale_pct = cfg.get(f"{mode}_watermark_scale_pct", 15.0)
+    margin_pct = cfg.get(f"{mode}_watermark_margin_pct", 4.0)
     try:
         scale_ratio = float(scale_pct) / 100.0
     except (TypeError, ValueError):
@@ -1784,8 +1784,8 @@ def _watermark_ratios(cfg: dict, mode: str = "rss") -> tuple[float, float]:
         margin_ratio = float(margin_pct) / 100.0
     except (TypeError, ValueError):
         margin_ratio = 0.035
-    scale_ratio = min(0.35, max(0.08, scale_ratio))
-    margin_ratio = min(0.12, max(0.01, margin_ratio))
+    scale_ratio = min(0.18, max(0.12, scale_ratio))
+    margin_ratio = min(0.05, max(0.03, margin_ratio))
     return scale_ratio, margin_ratio
 
 
@@ -1798,33 +1798,55 @@ def _apply_watermark_to_canvas(
 ) -> bool:
     logger.info("[WM_APPLY_START] branch=%s", branch)
     if not watermark_path or not watermark_path.exists() or not watermark_path.is_file():
-        logger.warning("[WM_APPLY_FAIL] branch=%s reason=watermark_file_missing path=%s", branch, watermark_path)
+        logger.warning("[WM_FAIL] branch=%s reason=watermark_file_missing path=%s", branch, watermark_path)
         return False
     try:
         wm = Image.open(watermark_path).convert("RGBA")
         canvas_w, canvas_h = canvas.size
-        logger.info("[WM_IMAGE_INPUT_SIZE] branch=%s width=%s height=%s", branch, wm.width, wm.height)
-        logger.info("[WM_FINAL_CANVAS_SIZE] branch=%s width=%s height=%s", branch, canvas_w, canvas_h)
+        logger.info(
+            "[WM_IMAGE_SIZE] branch=%s canvas_width=%s canvas_height=%s watermark_source_width=%s watermark_source_height=%s",
+            branch,
+            canvas_w,
+            canvas_h,
+            wm.width,
+            wm.height,
+        )
 
         scale_ratio, margin_ratio = _watermark_ratios(cfg, mode)
         target_w = max(24, int(canvas_w * scale_ratio))
-        target_w = min(target_w, max(24, int(canvas_w * 0.5)))
+        target_w = min(target_w, max(24, int(canvas_w * 0.18)))
         target_h = max(1, int(target_w * (wm.height / max(1, wm.width))))
         wm_resized = wm.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
-        margin_px = max(8, int(min(canvas_w, canvas_h) * margin_ratio))
-        pos_x = max(margin_px, canvas_w - wm_resized.width - margin_px)
-        pos_y = max(margin_px, canvas_h - wm_resized.height - margin_px)
+        margin_x = max(4, int(canvas_w * margin_ratio))
+        margin_y = max(4, int(canvas_h * margin_ratio))
+        pos_x = canvas_w - wm_resized.width - margin_x
+        pos_y = canvas_h - wm_resized.height - margin_y
+        pos_x = max(0, pos_x)
+        pos_y = max(0, pos_y)
 
-        logger.info("[WM_SCALE] branch=%s ratio=%.4f width=%s height=%s", branch, scale_ratio, wm_resized.width, wm_resized.height)
-        logger.info("[WM_MARGIN] branch=%s ratio=%.4f px=%s", branch, margin_ratio, margin_px)
-        logger.info("[WM_POSITION] branch=%s corner=bottom_right x=%s y=%s", branch, pos_x, pos_y)
+        logger.info(
+            "[WM_SCALE] branch=%s ratio=%.4f target_width=%s target_height=%s",
+            branch,
+            scale_ratio,
+            wm_resized.width,
+            wm_resized.height,
+        )
+        logger.info(
+            "[WM_POSITION] branch=%s corner=bottom_right x=%s y=%s margin_x=%s margin_y=%s margin_ratio=%.4f",
+            branch,
+            pos_x,
+            pos_y,
+            margin_x,
+            margin_y,
+            margin_ratio,
+        )
 
         canvas.paste(wm_resized, (pos_x, pos_y), wm_resized)
-        logger.info("[WM_APPLY_OK] branch=%s", branch)
+        logger.info("[WM_APPLIED] branch=%s", branch)
         return True
     except Exception as exc:
-        logger.warning("[WM_APPLY_FAIL] branch=%s reason=%s", branch, exc)
+        logger.warning("[WM_FAIL] branch=%s reason=%s", branch, exc)
         return False
 
 
@@ -1853,7 +1875,7 @@ def _watermark_original_image_with_status(
             pass
 
     if not _apply_watermark_to_canvas(img, watermark_path, cfg, mode=mode, branch=branch):
-        return None, "watermark_apply_failed"
+        logger.warning("[WM_FAIL] branch=%s reason=watermark_apply_failed_fallback_to_unwatermarked", branch)
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             temp_path = Path(tmp.name)
@@ -2227,7 +2249,7 @@ def _compose_rss_image_with_status(
         base.paste(fitted, (paste_x, paste_y), fitted)
 
         if watermark_path and not _apply_watermark_to_canvas(base, watermark_path, cfg or {}, mode="rss", branch="template_compose"):
-            return None, "watermark_apply_failed"
+            logger.warning("[WM_FAIL] branch=template_compose reason=watermark_apply_failed_fallback_to_unwatermarked")
 
         composed = base.convert("RGB")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
@@ -2282,7 +2304,7 @@ def _compose_vertical_rss_image_with_optional_watermark(
 
     try:
         if watermark_path and not _apply_watermark_to_canvas(rss_img, watermark_path, cfg or {}, mode="rss", branch="vertical_compose"):
-            return None, True, "watermark_apply_failed"
+            logger.warning("[WM_FAIL] branch=vertical_compose reason=watermark_apply_failed_fallback_to_unwatermarked")
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             temp_path = Path(tmp.name)
