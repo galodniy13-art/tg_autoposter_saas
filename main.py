@@ -4825,7 +4825,16 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
 
 def build_channel_picker(cfg: dict, action: str, back_callback: str) -> InlineKeyboardMarkup:
     channels = get_saved_channels(cfg)
-    return build_channel_picker_menu(ui_pack(cfg), [channel_display_name(cfg, ch) for ch in channels], action, back_callback)
+    channel_labels = [channel_display_name(cfg, ch) for ch in channels]
+    button_callbacks = [f"ui:pickchannel:{action}:{idx}" for idx in range(1, len(channel_labels) + 1)]
+    logger.info(
+        "[CHANNEL_PICKER_OPEN] action=%s back=%s channels=%s",
+        action,
+        back_callback,
+        channel_labels,
+    )
+    logger.info("[CHANNEL_PICKER_BUTTON] action=%s callbacks=%s", action, button_callbacks)
+    return build_channel_picker_menu(ui_pack(cfg), channel_labels, action, back_callback)
 
 
 # ===================== Commands =====================
@@ -4946,6 +4955,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user_id = q.from_user.id
     cfg = load_client(user_id)
     data = q.data or ""
+    if data in {"ui:setup", "ui:modes", "ui:mode:rss:menu", "ui:mode:creative:menu"}:
+        logger.info("[CHANNEL_PICKER_BACK] callback=%s", data)
     if data in {
         "ui:setup",
         "ui:modes",
@@ -4982,19 +4993,23 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data.startswith("ui:pickchannel:"):
+        logger.info("[CHANNEL_PICKER_CALLBACK] data=%s", data)
         parts = data.split(":", 3)
         if len(parts) != 4:
+            logger.warning("[CHANNEL_PICKER_ERROR] reason=bad_parts data=%s parts=%s", data, parts)
             await q.answer()
             return
         action = parts[2]
         try:
             idx = int(parts[3]) - 1
         except ValueError:
+            logger.warning("[CHANNEL_PICKER_ERROR] reason=bad_index data=%s", data)
             await q.answer()
             return
 
         channels = get_saved_channels(cfg)
         if idx < 0 or idx >= len(channels):
+            logger.warning("[CHANNEL_PICKER_ERROR] reason=index_out_of_range data=%s channels=%s", data, len(channels))
             await q.answer()
             return
 
@@ -5004,8 +5019,10 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         mark_channel_selection_origin(context, action)
         switch_active_channel(cfg, selected)
         save_client(user_id, cfg)
+        logger.info("[CHANNEL_SELECTED] action=%s channel=%s idx=%s", action, selected, idx + 1)
         await q.answer()
 
+        route_data = data
         if action == "creative_menu":
             text = ui_text(cfg, "creative_menu_title") + "\n\n" + selected_channel_text(cfg, selected)
             await q.message.reply_text(text, reply_markup=build_creative_submenu(cfg))
@@ -5016,69 +5033,71 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
         if action in ("creative_editprompt", "rss_editprompt"):
             mapped = "ui:creative:stylemenu" if action == "creative_editprompt" else "ui:rss:stylemenu"
-            q.data = mapped
+            route_data = mapped
         elif action in ("creative_buildprompt", "rss_buildprompt"):
             mapped = "ui:creative:buildprompt" if action == "creative_buildprompt" else "ui:rss:buildprompt"
-            q.data = mapped
+            route_data = mapped
         elif action in ("creative_copystyle", "rss_copystyle"):
             mapped = "ui:creative:copystyle" if action == "creative_copystyle" else "ui:rss:copystyle"
-            q.data = mapped
+            route_data = mapped
         elif action == "creative_variety":
-            q.data = "ui:creative:variety"
+            route_data = "ui:creative:variety"
         elif action == "creative_visual":
-            q.data = "ui:creative:visual"
+            route_data = "ui:creative:visual"
         elif action == "creative_content_plan":
-            q.data = "ui:creative:contentplan"
+            route_data = "ui:creative:contentplan"
         elif action == "creative_content_plan_regenerate":
-            q.data = "ui:creative:contentplan:regenerate"
+            route_data = "ui:creative:contentplan:regenerate"
         elif action == "creative_content_plan_edit":
-            q.data = "ui:creative:contentplan:edit"
+            route_data = "ui:creative:contentplan:edit"
         elif action == "creative_sources":
-            q.data = "ui:creative:sources"
+            route_data = "ui:creative:sources"
         elif action.startswith("creative_sources_"):
             source_type = action.replace("creative_sources_", "", 1)
             if source_type in CREATIVE_SOURCE_META:
-                q.data = f"ui:creative:sources:{source_type}"
+                route_data = f"ui:creative:sources:{source_type}"
         elif action in ("creative_preview", "rss_preview"):
             mapped = "ui:creative:preview" if action == "creative_preview" else "ui:rss:preview"
-            q.data = mapped
+            route_data = mapped
         elif action in ("rss_feeds",):
-            q.data = "ui:rss:feeds"
+            route_data = "ui:rss:feeds"
         elif action == "rss_output":
-            q.data = "ui:rss:output"
+            route_data = "ui:rss:output"
         elif action == "creative_output":
-            q.data = "ui:creative:output"
+            route_data = "ui:creative:output"
         elif action in ("schedule_rss_menu", "schedule_creative_menu"):
             mapped = "ui:schedule:rss:menu" if action == "schedule_rss_menu" else "ui:schedule:creative:menu"
-            q.data = mapped
+            route_data = mapped
         elif action in ("schedule_rss_edit", "schedule_creative_edit"):
             mapped = "ui:schedule:rss:edit" if action == "schedule_rss_edit" else "ui:schedule:creative:edit"
-            q.data = mapped
+            route_data = mapped
         elif action in ("schedule_rss_toggle", "schedule_creative_toggle"):
             mapped = "ui:schedule:rss:toggle" if action == "schedule_rss_toggle" else "ui:schedule:creative:toggle"
-            q.data = mapped
+            route_data = mapped
         elif action in ("schedule_rss_switch", "schedule_creative_switch"):
             mapped = "ui:schedule:rss:switch_mode" if action == "schedule_rss_switch" else "ui:schedule:creative:switch_mode"
-            q.data = mapped
+            route_data = mapped
         elif action in ("schedule_rss_interval", "schedule_creative_interval"):
             mapped = "ui:schedule:rss:interval" if action == "schedule_rss_interval" else "ui:schedule:creative:interval"
-            q.data = mapped
+            route_data = mapped
         elif action in ("schedule_rss_quiet", "schedule_creative_quiet"):
             mapped = "ui:schedule:rss:quiet" if action == "schedule_rss_quiet" else "ui:schedule:creative:quiet"
-            q.data = mapped
+            route_data = mapped
         elif action in ("schedule_rss_freshness", "schedule_creative_freshness"):
             mapped = "ui:schedule:rss:freshness" if action == "schedule_rss_freshness" else "ui:schedule:creative:freshness"
-            q.data = mapped
+            route_data = mapped
         elif action in ("schedule_rss_timezone", "schedule_creative_timezone"):
             mode = "creative" if action == "schedule_creative_timezone" else "rss"
             context.user_data["awaiting_timezone_mode"] = mode
-            q.data = "ui:schedule:timezone"
+            route_data = "ui:schedule:timezone"
         elif action == "setup_modes":
-            q.data = "ui:modes"
+            route_data = "ui:modes"
         else:
+            logger.warning("[CHANNEL_PICKER_ERROR] reason=unknown_action action=%s", action)
             await q.message.reply_text(selected_channel_text(cfg, selected))
             return
-        data = q.data or ""
+        logger.info("[CHANNEL_PICKER_CALLBACK] action=%s routed_to=%s", action, route_data)
+        data = route_data
 
     if data == "ui:setup":
         logger.info("[NAV_ENTER] screen=setup")
