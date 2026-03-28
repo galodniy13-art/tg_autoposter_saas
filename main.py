@@ -3728,15 +3728,201 @@ def mode_schedule_state(cfg: dict, mode: str) -> tuple[bool, list[str], str, str
     return enabled, times, last_date, last_time
 
 
+def mode_activation_state(cfg: dict, mode: str) -> bool:
+    return mode_autopost_enabled(cfg, mode)
+
+
+def _quiet_window_duration_minutes(start: str, end: str) -> int:
+    start_hm = _parse_hhmm(start)
+    end_hm = _parse_hhmm(end)
+    if not start_hm or not end_hm:
+        return 0
+    start_total = start_hm[0] * 60 + start_hm[1]
+    end_total = end_hm[0] * 60 + end_hm[1]
+    if start_total == end_total:
+        return 0
+    if end_total > start_total:
+        return end_total - start_total
+    return (24 * 60 - start_total) + end_total
+
+
+def blocked_minutes_per_day(cfg: dict, mode: str) -> int:
+    total = sum(_quiet_window_duration_minutes(start, end) for start, end in quiet_windows_for_mode(cfg, mode))
+    return min(24 * 60, max(0, total))
+
+
+def activation_readiness_issues(cfg: dict, mode: str) -> list[str]:
+    effective_mode = "rss" if mode == "both" else mode
+    issues: list[str] = []
+    if not cfg.get("channel"):
+        issues.append(ui_text(cfg, "activation_issue_channel"))
+    if mode in {"rss", "both"} and not cfg.get("feeds"):
+        issues.append(ui_text(cfg, "activation_issue_feeds"))
+    if not channel_timezone_is_set(cfg):
+        issues.append(ui_text(cfg, "activation_issue_timezone"))
+
+    mode_flag_key = f"{effective_mode}_use_interval"
+    _, times, _, _ = mode_schedule_state(cfg, effective_mode)
+    has_mode_flag = mode_flag_key in cfg
+    has_slots = bool(times)
+    if not has_mode_flag and not has_slots:
+        issues.append(ui_text(cfg, "activation_issue_posting_mode"))
+    use_interval = mode_uses_interval(cfg, effective_mode)
+    if not use_interval and not has_slots:
+        issues.append(ui_text(cfg, "activation_issue_slots"))
+    return issues
+
+
+def activation_risk_warnings(cfg: dict, mode: str) -> list[str]:
+    effective_mode = "rss" if mode == "both" else mode
+    warnings: list[str] = []
+    blocked_min = blocked_minutes_per_day(cfg, effective_mode)
+    if blocked_min >= 16 * 60:
+        warnings.append(ui_text(cfg, "activation_warn_blocked_hours").format(hours=round(blocked_min / 60, 1)))
+
+    freshness = rss_freshness_minutes(cfg)
+    if mode in {"rss", "both"} and freshness <= 60:
+        warnings.append(ui_text(cfg, "activation_warn_freshness").format(minutes=freshness))
+
+    use_interval = mode_uses_interval(cfg, effective_mode)
+    interval_min = max(1, int(cfg.get("interval_minutes", 30) or 30))
+    if use_interval and interval_min >= 360:
+        warnings.append(ui_text(cfg, "activation_warn_interval").format(interval=interval_min))
+
+    if not use_interval:
+        _, times, _, _ = mode_schedule_state(cfg, effective_mode)
+        if len(times) <= 1:
+            warnings.append(ui_text(cfg, "activation_warn_slots_count"))
+        parsed_slots = sorted([_parse_hhmm(t) for t in times if _parse_hhmm(t)])
+        if len(parsed_slots) >= 2:
+            max_gap = 0
+            expanded = [h * 60 + m for h, m in parsed_slots]
+            for i in range(len(expanded)):
+                a = expanded[i]
+                b = expanded[(i + 1) % len(expanded)]
+                gap = (b - a) if i + 1 < len(expanded) else (24 * 60 - a + b)
+                max_gap = max(max_gap, gap)
+            if max_gap >= 10 * 60:
+                warnings.append(ui_text(cfg, "activation_warn_slots_gap").format(hours=round(max_gap / 60, 1)))
+
+    available_min = max(0, 24 * 60 - blocked_min)
+    if use_interval:
+        est_posts = available_min // interval_min
+        if est_posts <= 1:
+            warnings.append(ui_text(cfg, "activation_warn_low_volume_interval").format(count=int(est_posts)))
+    return warnings
+
+
+def _next_scheduled_run(cfg: dict, mode: str, now: datetime) -> datetime | None:
+    _, times, _, _ = mode_schedule_state(cfg, mode)
+    parsed_times: list[tuple[int, int]] = []
+    for slot in times:
+        hm = _parse_hhmm(slot)
+        if hm:
+            parsed_times.append(hm)
+    if not parsed_times:
+        return None
+    for day_offset in range(0, 8):
+        base = (now + timedelta(days=day_offset)).replace(second=0, microsecond=0)
+        for hh, mm in sorted(parsed_times):
+            candidate = base.replace(hour=hh, minute=mm)
+            if candidate < now:
+                continue
+            shifted = _apply_quiet_hours(cfg, mode, candidate)
+            if shifted >= now:
+                return shifted
+    return None
+
+
+def mode_next_run_text(cfg: dict, mode: str, now: datetime | None = None) -> str:
+    reference_now = now or user_now(cfg)
+    if mode_uses_interval(cfg, mode):
+        next_run = _parse_local_iso_datetime(cfg.get(_interval_next_run_key(mode)) or "")
+        if not next_run:
+            next_run = _schedule_next_interval_run(cfg, mode, reference_now)
+        return next_run.strftime("%Y-%m-%d %H:%M")
+    next_run = _next_scheduled_run(cfg, mode, reference_now)
+    if not next_run:
+        return ui_text(cfg, "schedule_not_set")
+    return next_run.strftime("%Y-%m-%d %H:%M")
+
+
+def activate_posting(cfg: dict, mode: str, *, turn_on: bool) -> tuple[bool, str]:
+    if turn_on:
+        issues = activation_readiness_issues(cfg, mode)
+        if issues:
+            text = ui_text(cfg, "activation_blocked_intro") + "\n" + "\n".join(f"- {item}" for item in issues)
+            return False, text
+        set_mode_autopost_enabled(cfg, mode, True)
+        if mode in {"rss", "creative"}:
+            cfg[f"{mode}_schedule_enabled"] = True
+            if mode_uses_interval(cfg, mode):
+                _schedule_next_interval_run(cfg, mode, user_now(cfg))
+        else:
+            cfg["rss_schedule_enabled"] = True
+            cfg["creative_schedule_enabled"] = True
+            for _m in ("rss", "creative"):
+                if mode_uses_interval(cfg, _m):
+                    _schedule_next_interval_run(cfg, _m, user_now(cfg))
+        warnings = activation_risk_warnings(cfg, mode)
+        warning_text = ""
+        if warnings:
+            warning_text = ui_text(cfg, "activation_warning_intro") + "\n" + "\n".join(f"- {item}" for item in warnings) + "\n\n"
+        return True, warning_text + live_confirmation_text(cfg, mode)
+
+    set_mode_autopost_enabled(cfg, mode, False)
+    if mode in {"rss", "creative"}:
+        cfg[f"{mode}_schedule_enabled"] = False
+    else:
+        cfg["rss_schedule_enabled"] = False
+        cfg["creative_schedule_enabled"] = False
+    return True, ui_text(cfg, "activation_off_confirmed")
+
+
+def live_confirmation_text(cfg: dict, mode: str) -> str:
+    effective_mode = "rss" if mode == "both" else mode
+    mode_label = ui_text(cfg, "posting_mode_interval") if mode_uses_interval(cfg, effective_mode) else ui_text(cfg, "posting_mode_scheduled")
+    _, times, _, _ = mode_schedule_state(cfg, effective_mode)
+    schedule_info = ui_text(cfg, "schedule_empty_slots")
+    if mode_uses_interval(cfg, effective_mode):
+        schedule_info = ui_text(cfg, "live_line_interval").format(interval=int(cfg.get("interval_minutes", 30) or 30))
+    elif times:
+        schedule_info = ", ".join(times)
+    blocked = quiet_windows_for_mode(cfg, effective_mode)
+    blocked_text = ", ".join(f"{start}–{end}" for start, end in blocked) if blocked else ui_text(cfg, "schedule_blocked_hours_off")
+    channel = channel_display_name(cfg, cfg.get("channel") or "—")
+    return (
+        ui_text(cfg, "live_title")
+        + "\n\n"
+        + ui_text(cfg, "live_line_channel").format(channel=channel)
+        + "\n"
+        + ui_text(cfg, "live_line_mode").format(mode=mode_label)
+        + "\n"
+        + ui_text(cfg, "live_line_schedule").format(schedule=schedule_info)
+        + "\n"
+        + ui_text(cfg, "live_line_timezone").format(timezone=user_timezone_label(cfg))
+        + "\n"
+        + ui_text(cfg, "live_line_freshness").format(minutes=rss_freshness_minutes(cfg))
+        + "\n"
+        + ui_text(cfg, "live_line_blocked").format(blocked=blocked_text)
+        + "\n\n"
+        + ui_text(cfg, "live_line_next_check").format(next_run=mode_next_run_text(cfg, effective_mode))
+        + "\n"
+        + ui_text(cfg, "live_line_next_post_hint")
+    )
+
+
 def schedule_summary_for_mode(cfg: dict, mode: str) -> str:
-    enabled, times, _, _ = mode_schedule_state(cfg, mode)
+    _, times, _, _ = mode_schedule_state(cfg, mode)
     posting_status = "ON" if mode_autopost_enabled(cfg, mode) else "OFF"
     posting_mode = ui_text(cfg, "posting_mode_interval") if mode_uses_interval(cfg, mode) else ui_text(cfg, "posting_mode_scheduled")
-    times_text = ", ".join(times) if times else ui_text(cfg, "schedule_empty_slots")
+    if mode_uses_interval(cfg, mode):
+        times_text = ui_text(cfg, "live_line_interval").format(interval=int(cfg.get("interval_minutes", 30) or 30))
+    else:
+        times_text = ", ".join(times) if times else ui_text(cfg, "schedule_empty_slots")
     quiet_windows = quiet_windows_for_mode(cfg, mode)
     quiet_text = ", ".join([f"{start}–{end}" for start, end in quiet_windows]) if quiet_windows else ui_text(cfg, "schedule_blocked_hours_off")
-    next_run = _parse_local_iso_datetime(cfg.get(_interval_next_run_key(mode)) or "")
-    next_text = next_run.strftime("%Y-%m-%d %H:%M") if next_run else ui_text(cfg, "schedule_not_set")
+    next_text = mode_next_run_text(cfg, mode)
     return (
         ui_text(cfg, "schedule_summary_title")
         + "\n"
@@ -4187,8 +4373,7 @@ def mark_mode_scheduled(cfg: dict, mode: str, now: datetime) -> None:
         cfg["rss_last_schedule_time"] = due_slot
 
 def build_mode_schedule_submenu(cfg: dict, mode: str) -> InlineKeyboardMarkup:
-    enabled, _, _, _ = mode_schedule_state(cfg, mode)
-    return build_mode_schedule_menu(ui_pack(cfg), mode, enabled, mode_uses_interval(cfg, mode))
+    return build_mode_schedule_menu(ui_pack(cfg), mode, mode_activation_state(cfg, mode), mode_uses_interval(cfg, mode))
 
 
 def schedule_mode_title_key(mode: str) -> str:
@@ -4278,7 +4463,7 @@ async def rss_preview_text(bot, user_id: int, cfg: dict) -> tuple[str, str | Non
         return ui_text(cfg, "preview_no_feeds"), None, [], None
     best = pick_newest_unseen(cfg)
     if not best:
-        return "No new items found (or everything already posted).", None, [], None
+        return ui_text(cfg, "preview_no_items_warning"), None, [], None
     _, title, link, src = best
     summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
     msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
@@ -4580,6 +4765,30 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"✨ {ui_text(cfg, 'status_creative_daily')}: {creative_daily}\n"
         f"📅 {ui_text(cfg, 'status_valid_until')}: {sub}"
     )
+    raw_mode = (cfg.get("mode") or "rss").strip().lower()
+    active_mode = "creative" if raw_mode == "creator" else ("rss" if raw_mode == "rss" else "both")
+    if active_mode == "both":
+        live_summary = (
+            ui_text(cfg, "status_live_title")
+            + "\n"
+            + ui_text(cfg, "status_live_mode_section").format(mode="RSS")
+            + "\n"
+            + schedule_summary_for_mode(cfg, "rss")
+            + "\n\n"
+            + ui_text(cfg, "status_live_mode_section").format(mode="Creative")
+            + "\n"
+            + schedule_summary_for_mode(cfg, "creative")
+        )
+    else:
+        display_mode = "Creative" if active_mode == "creative" else "RSS"
+        live_summary = (
+            ui_text(cfg, "status_live_title")
+            + "\n"
+            + ui_text(cfg, "status_live_mode_section").format(mode=display_mode)
+            + "\n"
+            + schedule_summary_for_mode(cfg, active_mode)
+        )
+    text += "\n\n" + live_summary
     markup = build_main_menu_clean(cfg)
 
     if update.callback_query:
@@ -5423,7 +5632,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     return
                 best = pick_newest_unseen(cfg)
                 if not best:
-                    await q.message.reply_text("No new items found (or everything already posted).", reply_markup=build_rss_submenu(cfg))
+                    await q.message.reply_text(ui_text(cfg, "preview_no_items_warning"), reply_markup=build_rss_submenu(cfg))
                     return
                 _, title, link, src = best
                 summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
@@ -5582,13 +5791,12 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 reply_markup=build_channel_picker(cfg, action, f"ui:schedule:{mode}:menu"),
             )
             return
-        enabled, _, _, _ = mode_schedule_state(cfg, mode)
-        if mode == "creative":
-            cfg["creative_schedule_enabled"] = not enabled
-            notice = ui_text(cfg, "schedule_enabled") if not enabled else ui_text(cfg, "schedule_disabled")
-        else:
-            cfg["rss_schedule_enabled"] = not enabled
-            notice = ui_text(cfg, "schedule_enabled") if not enabled else ui_text(cfg, "schedule_disabled")
+        enabled = mode_activation_state(cfg, mode)
+        ok, notice = activate_posting(cfg, mode, turn_on=not enabled)
+        if not ok:
+            await q.answer()
+            await q.message.reply_text(notice, reply_markup=build_mode_schedule_submenu(cfg, mode))
+            return
         save_client(user_id, cfg)
         await q.answer()
         text = selected_channel_text(cfg, selected) + "\n\n" + notice + "\n\n" + schedule_mode_menu_text(cfg, mode)
@@ -7572,7 +7780,7 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     best = pick_newest_unseen(cfg)
     if not best:
-        await reply_ui(update, "No new items found (or everything already posted).", cfg, show_menu=True)
+        await reply_ui(update, ui_text(cfg, "preview_no_items_warning"), cfg, show_menu=True)
         return
 
     preview, image_url, preview_entities, _ = await rss_preview_text(context.bot, user_id, cfg)
@@ -7699,27 +7907,22 @@ async def autoposton_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = update.effective_user.id
     cfg = load_client(user_id)
     mode = (cfg.get("mode") or "rss").strip().lower()
-    if mode == "creator":
-        set_mode_autopost_enabled(cfg, "creative", True)
-    elif mode == "rss":
-        set_mode_autopost_enabled(cfg, "rss", True)
-    else:
-        set_mode_autopost_enabled(cfg, "both", True)
+    activation_mode = "creative" if mode == "creator" else ("rss" if mode == "rss" else "both")
+    ok, notice = activate_posting(cfg, activation_mode, turn_on=True)
+    if not ok:
+        await reply_ui(update, notice, cfg, show_menu=True)
+        return
     save_client(user_id, cfg)
-    await reply_ui(update, "🤖 Autopost ON.", cfg, show_menu=True)
+    await reply_ui(update, notice, cfg, show_menu=True)
 
 async def autopostoff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
     mode = (cfg.get("mode") or "rss").strip().lower()
-    if mode == "creator":
-        set_mode_autopost_enabled(cfg, "creative", False)
-    elif mode == "rss":
-        set_mode_autopost_enabled(cfg, "rss", False)
-    else:
-        set_mode_autopost_enabled(cfg, "both", False)
+    activation_mode = "creative" if mode == "creator" else ("rss" if mode == "rss" else "both")
+    _, notice = activate_posting(cfg, activation_mode, turn_on=False)
     save_client(user_id, cfg)
-    await reply_ui(update, "🛑 Autopost OFF.", cfg, show_menu=True)
+    await reply_ui(update, notice, cfg, show_menu=True)
 
 # ===================== Admin commands =====================
 async def setrss_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
