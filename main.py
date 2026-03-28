@@ -1104,6 +1104,23 @@ def _feed_validation_error_message(cfg: dict, reason: str | None) -> str:
     return f"{ui_text(cfg, 'feed_read_failed')}\n\nReason: {_feed_validation_reason_text(reason)}"
 
 
+def _feed_recovery_user_message(cfg: dict, reason: str | None, *, x_attempt: bool = False) -> str:
+    code = (reason or "").strip()
+    if code == "x_status_url_not_supported":
+        return ui_text(cfg, "feed_recovery_x_status")
+    if code in {"invalid_x_profile_url", "username_parse_failed"} and x_attempt:
+        return ui_text(cfg, "feed_recovery_x_profile_invalid")
+    if code == "feed_parsed_but_empty":
+        return ui_text(cfg, "feed_recovery_empty")
+    if code == "response_not_xml":
+        return ui_text(cfg, "feed_recovery_unsupported")
+    if code.startswith("http_error_") or code == "request_error":
+        return ui_text(cfg, "feed_recovery_unreachable")
+    if code in {"primary_provider_failed", "fallback_provider_failed"}:
+        return ui_text(cfg, "feed_recovery_x_transform_failed")
+    return ui_text(cfg, "feed_recovery_invalid")
+
+
 def _resolve_x_fallback_provider_url(provider: str, normalized_x_url: str, username: str) -> tuple[str | None, str]:
     base = (provider or "").strip()
     if not base:
@@ -1318,15 +1335,15 @@ async def process_feed_input(update: Update, context: ContextTypes.DEFAULT_TYPE,
         await update.message.reply_text(ui_text(cfg, "feed_limit_reached").format(limit=limit))
         return
 
-    await update.message.reply_text("Processing your feed...")
+    await update.message.reply_text(ui_text(cfg, "feed_processing"))
     feed_url, status, reason, is_x_attempt = resolve_feed_input_url(url)
     if not feed_url:
         context.user_data.pop("awaiting_feed_add", None)
         logger.info("[FEED_VALIDATE_FAIL] user_id=%s status=%s reason=%s input=%s", user_id, status, reason or "unknown", url)
-        if status == "failed":
+        if status == "failed" and is_admin(user_id):
             await update.message.reply_text(f"{_feed_auto_fail_message(cfg, user_id, reason)}\n\nReason: {_feed_validation_reason_text(reason)}")
         else:
-            await update.message.reply_text(_feed_validation_error_message(cfg, reason))
+            await update.message.reply_text(_feed_recovery_user_message(cfg, reason, x_attempt=is_x_attempt))
         return
 
     context.user_data["awaiting_feed_add"] = "name"
@@ -4460,10 +4477,10 @@ def parse_schedule_input(text: str) -> list[str] | None:
 async def rss_preview_text(bot, user_id: int, cfg: dict) -> tuple[str, str | None, list[MessageEntity], Path | None]:
     feeds = cfg.get("feeds", [])
     if not feeds:
-        return ui_text(cfg, "preview_no_feeds"), None, [], None
+        return ui_text(cfg, "preview_empty_no_feed"), None, [], None
     best = pick_newest_unseen(cfg)
     if not best:
-        return ui_text(cfg, "preview_no_items_warning"), None, [], None
+        return preview_empty_state_text(cfg), None, [], None
     _, title, link, src = best
     summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
     msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
@@ -4575,6 +4592,107 @@ def channel_display_name(cfg: dict, channel: str) -> str:
 
 def selected_channel_text(cfg: dict, channel: str) -> str:
     return ui_text(cfg, "channel_selected_now").format(channel=channel_display_name(cfg, channel))
+
+
+def rss_setup_guidance_text(user_id: int, cfg: dict) -> str:
+    if not cfg.get("feeds"):
+        return ui_text(cfg, "rss_primary_next_feed")
+    if not (get_mode_prompt(user_id, cfg, "rss") or "").strip():
+        return ui_text(cfg, "rss_primary_next_prompt")
+    issues = activation_readiness_issues(cfg, "rss")
+    if any(issue in issues for issue in (ui_text(cfg, "activation_issue_timezone"), ui_text(cfg, "activation_issue_posting_mode"), ui_text(cfg, "activation_issue_slots"))):
+        return ui_text(cfg, "rss_primary_next_schedule")
+    if not mode_activation_state(cfg, "rss"):
+        return ui_text(cfg, "rss_primary_next_enable")
+    return ui_text(cfg, "rss_primary_next_preview")
+
+
+def rss_menu_text(user_id: int, cfg: dict, selected_channel: str) -> str:
+    return (
+        ui_text(cfg, "rss_menu_title")
+        + "\n\n"
+        + selected_channel_text(cfg, selected_channel)
+        + "\n\n"
+        + rss_setup_guidance_text(user_id, cfg)
+    )
+
+
+def _rss_quickstart_steps_status(user_id: int, cfg: dict) -> list[tuple[str, bool]]:
+    has_feed = bool(cfg.get("feeds"))
+    has_prompt = bool((get_mode_prompt(user_id, cfg, "rss") or "").strip())
+    has_posting_mode = ("rss_use_interval" in cfg) or bool(mode_schedule_state(cfg, "rss")[1])
+    return [
+        (ui_text(cfg, "quickstart_step_channel"), bool(cfg.get("channel"))),
+        (ui_text(cfg, "quickstart_step_feed"), has_feed),
+        (ui_text(cfg, "quickstart_step_prompt"), has_prompt),
+        (ui_text(cfg, "quickstart_step_mode"), has_posting_mode),
+        (ui_text(cfg, "quickstart_step_timezone"), channel_timezone_is_set(cfg)),
+        (ui_text(cfg, "quickstart_step_enable"), mode_activation_state(cfg, "rss")),
+        (ui_text(cfg, "quickstart_step_preview"), mode_activation_state(cfg, "rss") and has_feed),
+    ]
+
+
+def rss_quickstart_text(user_id: int, cfg: dict, selected_channel: str) -> str:
+    lines = [
+        ui_text(cfg, "rss_quickstart_title"),
+        "",
+        selected_channel_text(cfg, selected_channel),
+        "",
+        ui_text(cfg, "rss_quickstart_intro"),
+        "",
+    ]
+    for label, done in _rss_quickstart_steps_status(user_id, cfg):
+        marker = "✅" if done else "➡️"
+        lines.append(f"{marker} {label}")
+    lines.append("")
+    lines.append(ui_text(cfg, "rss_quickstart_next_hint"))
+    return "\n".join(lines)
+
+
+def build_rss_quickstart_menu(cfg: dict) -> InlineKeyboardMarkup:
+    labels = ui_pack(cfg)
+    rows = [
+        [InlineKeyboardButton(labels["btn_quickstart_add_feed"], callback_data="ui:addfeed")],
+        [InlineKeyboardButton(labels["btn_quickstart_set_prompt"], callback_data="ui:rss:stylemenu")],
+        [InlineKeyboardButton(labels["btn_quickstart_simple_mode"], callback_data="ui:rss:quickstart:simple_mode")],
+        [InlineKeyboardButton(labels["btn_quickstart_timezone"], callback_data="ui:schedule:timezone")],
+        [InlineKeyboardButton(labels["btn_quickstart_enable"], callback_data="ui:schedule:rss:toggle")],
+        [InlineKeyboardButton(labels["btn_quickstart_preview"], callback_data="ui:rss:preview")],
+        [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:rss:menu")],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def _preview_feed_stats(cfg: dict) -> tuple[int, int]:
+    total_entries = 0
+    processed_entries = 0
+    posted = set(cfg.get("posted_urls", []))
+    for feed_entry in cfg.get("feeds", []):
+        feed_url = _feed_url(feed_entry)
+        if not feed_url:
+            continue
+        try:
+            parsed = feedparser.parse(feed_url)
+        except Exception:
+            continue
+        entries = getattr(parsed, "entries", []) or []
+        total_entries += len(entries)
+        for entry in entries:
+            link = _entry_primary_link(entry)
+            if link and normalize_url(link) in posted:
+                processed_entries += 1
+    return total_entries, processed_entries
+
+
+def preview_empty_state_text(cfg: dict) -> str:
+    if not cfg.get("feeds"):
+        return ui_text(cfg, "preview_empty_no_feed")
+    total_entries, processed_entries = _preview_feed_stats(cfg)
+    if total_entries == 0:
+        return ui_text(cfg, "preview_empty_feed_no_items")
+    if processed_entries >= total_entries and total_entries > 0:
+        return ui_text(cfg, "preview_empty_all_processed")
+    return ui_text(cfg, "preview_empty_filtered")
 
 
 def clear_mode_channel_selection(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -4893,7 +5011,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.message.reply_text(text, reply_markup=build_creative_submenu(cfg))
             return
         if action == "rss_menu":
-            text = ui_text(cfg, "rss_menu_title") + "\n\n" + selected_channel_text(cfg, selected)
+            text = rss_menu_text(user_id, cfg, selected)
             await q.message.reply_text(text, reply_markup=build_rss_submenu(cfg))
             return
         if action in ("creative_editprompt", "rss_editprompt"):
@@ -5549,11 +5667,63 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
         logger.info("[NAV_ENTER] screen=rss_menu channel=%s", selected)
         await q.answer()
-        text = ui_text(cfg, "rss_menu_title") + "\n\n" + selected_channel_text(cfg, selected)
+        text = rss_menu_text(user_id, cfg, selected)
         try:
             await q.edit_message_text(text=text, reply_markup=build_rss_submenu(cfg))
         except BadRequest:
             await q.message.reply_text(text=text, reply_markup=build_rss_submenu(cfg))
+        return
+
+    if data == "ui:rss:quickstart":
+        if not await enforce_mode_paywall(update, cfg, "rss"):
+            return
+        selected, state = require_channel_context(cfg, context, "rss_menu")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "rss_menu", "ui:modes"),
+            )
+            return
+        await q.answer()
+        text = rss_quickstart_text(user_id, cfg, selected)
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_rss_quickstart_menu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_rss_quickstart_menu(cfg))
+        return
+
+    if data == "ui:rss:quickstart:simple_mode":
+        if not await enforce_mode_paywall(update, cfg, "rss"):
+            return
+        selected, state = require_channel_context(cfg, context, "rss_menu")
+        if state in {"empty", "pick"}:
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_empty") if state == "empty" else ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "rss_menu", "ui:modes") if state == "pick" else None,
+            )
+            return
+        cfg["rss_use_interval"] = True
+        if int(cfg.get("interval_minutes", 0) or 0) <= 0:
+            cfg["interval_minutes"] = 60
+        if not _parse_local_iso_datetime(cfg.get(_interval_next_run_key("rss")) or ""):
+            _schedule_next_interval_run(cfg, "rss", user_now(cfg))
+        save_client(user_id, cfg)
+        await q.answer()
+        text = (
+            rss_quickstart_text(user_id, cfg, selected)
+            + "\n\n"
+            + ui_text(cfg, "quickstart_simple_mode_set")
+        )
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_rss_quickstart_menu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_rss_quickstart_menu(cfg))
         return
 
     if data in ("ui:rss:pause_posting", "ui:rss:resume_posting"):
@@ -5576,13 +5746,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         save_client(user_id, cfg)
         await q.answer(ui_text(cfg, "rss_posting_paused_short") if pause_requested else ui_text(cfg, "rss_posting_resumed_short"))
         notice_key = "rss_posting_paused_notice" if pause_requested else "rss_posting_resumed_notice"
-        text = (
-            ui_text(cfg, "rss_menu_title")
-            + "\n\n"
-            + selected_channel_text(cfg, selected)
-            + "\n\n"
-            + ui_text(cfg, notice_key)
-        )
+        text = rss_menu_text(user_id, cfg, selected) + "\n\n" + ui_text(cfg, notice_key)
         try:
             await q.edit_message_text(text=text, reply_markup=build_rss_submenu(cfg))
         except BadRequest:
@@ -5628,11 +5792,17 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             try:
                 feeds = cfg.get("feeds", [])
                 if not feeds:
-                    await q.message.reply_text(ui_text(cfg, "preview_no_feeds"), reply_markup=build_rss_submenu(cfg))
+                    await q.message.reply_text(
+                        selected_channel_text(cfg, selected) + "\n\n" + ui_text(cfg, "preview_empty_no_feed"),
+                        reply_markup=build_rss_submenu(cfg),
+                    )
                     return
                 best = pick_newest_unseen(cfg)
                 if not best:
-                    await q.message.reply_text(ui_text(cfg, "preview_no_items_warning"), reply_markup=build_rss_submenu(cfg))
+                    await q.message.reply_text(
+                        selected_channel_text(cfg, selected) + "\n\n" + preview_empty_state_text(cfg),
+                        reply_markup=build_rss_submenu(cfg),
+                    )
                     return
                 _, title, link, src = best
                 summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
@@ -7564,17 +7734,19 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             if len(feeds) >= limit:
                 await send_menu(update, cfg, ui_text(cfg, "feed_limit_reached").format(limit=limit))
                 return
+            first_feed_added = len(feeds) == 0
             feeds.append({"url": url, "name": feed_name} if feed_name else url)
             cfg["feeds"] = feeds
             save_client(user_id, cfg)
             selected, state = require_channel_context(cfg, context, "rss_feeds")
+            orientation = ui_text(cfg, "rss_first_success_feed")
             if selected and state is None:
                 await update.message.reply_text(
-                    ui_text(cfg, "feed_added") + "\n\n" + feed_management_text(cfg, selected),
+                    ui_text(cfg, "feed_added") + "\n\n" + feed_management_text(cfg, selected) + ("\n\n" + orientation if first_feed_added else ""),
                     reply_markup=build_feed_menu(cfg),
                 )
             else:
-                await send_menu(update, cfg, ui_text(cfg, "feed_added") + "\n\n" + feeds_overview(cfg))
+                await send_menu(update, cfg, ui_text(cfg, "feed_added") + "\n\n" + feeds_overview(cfg) + ("\n\n" + orientation if first_feed_added else ""))
             return
 
         logger.info("[ADD_FEED_TEXT] user_id=%s text=%s", user_id, text.strip())
@@ -7775,12 +7947,12 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if not feeds:
-        await reply_ui(update, ui_text(cfg, "preview_no_feeds"), cfg, show_menu=True)
+        await reply_ui(update, ui_text(cfg, "preview_empty_no_feed"), cfg, show_menu=True)
         return
 
     best = pick_newest_unseen(cfg)
     if not best:
-        await reply_ui(update, ui_text(cfg, "preview_no_items_warning"), cfg, show_menu=True)
+        await reply_ui(update, preview_empty_state_text(cfg), cfg, show_menu=True)
         return
 
     preview, image_url, preview_entities, _ = await rss_preview_text(context.bot, user_id, cfg)
