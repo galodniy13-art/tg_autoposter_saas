@@ -4459,10 +4459,10 @@ def validate_hhmm(value: str) -> bool:
 
 
 def schedule_summary(cfg: dict) -> str:
-    enabled = "ON" if cfg.get("schedule_enabled") else "OFF"
+    enabled = ui_text(cfg, "schedule_status_on") if cfg.get("schedule_enabled") else ui_text(cfg, "schedule_status_off")
     times = cfg.get("schedule_times", [])
-    times_text = ", ".join(times) if times else "(empty)"
-    return f"Status: {enabled}\nTimes: {times_text}"
+    times_text = ", ".join(times) if times else ui_text(cfg, "schedule_times_empty")
+    return f"{ui_text(cfg, 'schedule_summary_status').replace('• ', '')}: {enabled}\n{ui_text(cfg, 'schedule_summary_slots').replace('• ', '').split(':', 1)[0]}: {times_text}"
 
 
 def parse_schedule_input(text: str) -> list[str] | None:
@@ -6670,8 +6670,12 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             context.user_data.pop("prompt_builder", None)
             await q.answer()
             await q.message.reply_text(ui_text(cfg, "prompt_builder_cancelled"))
+            selected_channel = (builder.get("selected_channel") or cfg.get("channel") or "").strip()
+            menu_text = ui_text(cfg, "creative_menu_title") if mode == "creative" else ui_text(cfg, "rss_menu_title")
+            if selected_channel:
+                menu_text = menu_text + "\n\n" + selected_channel_text(cfg, selected_channel)
             await q.message.reply_text(
-                ui_text(cfg, "creative_menu_title") if mode == "creative" else ui_text(cfg, "rss_menu_title"),
+                menu_text,
                 reply_markup=build_creative_submenu(cfg) if mode == "creative" else build_rss_submenu(cfg),
             )
             return
@@ -6688,8 +6692,11 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             context.user_data.pop("prompt_builder", None)
             await q.answer()
             await q.message.reply_text(ui_text(cfg, "prompt_builder_saved"))
+            menu_text = ui_text(cfg, "creative_menu_title") if mode == "creative" else ui_text(cfg, "rss_menu_title")
+            if selected_channel:
+                menu_text = menu_text + "\n\n" + selected_channel_text(cfg, selected_channel)
             await q.message.reply_text(
-                ui_text(cfg, "creative_menu_title") if mode == "creative" else ui_text(cfg, "rss_menu_title"),
+                menu_text,
                 reply_markup=build_creative_submenu(cfg) if mode == "creative" else build_rss_submenu(cfg),
             )
             return
@@ -6732,10 +6739,13 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             save_client(user_id, cfg)
             context.user_data.pop("copy_style_review", None)
             await q.answer()
+            menu_text = ui_text(cfg, "creative_menu_title") if mode == "creative" else ui_text(cfg, "rss_menu_title")
+            if selected_channel:
+                menu_text = menu_text + "\n\n" + selected_channel_text(cfg, selected_channel)
             await q.message.reply_text(
                 ui_text(cfg, "copy_style_success")
                 + "\n\n"
-                + (ui_text(cfg, "creative_menu_title") if mode == "creative" else ui_text(cfg, "rss_menu_title")),
+                + menu_text,
                 reply_markup=build_creative_submenu(cfg) if mode == "creative" else build_rss_submenu(cfg),
             )
             return
