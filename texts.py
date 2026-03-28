@@ -59,8 +59,8 @@ TEXTS = {
         "scheduling_menu_title": "🕒 Scheduling:",
         "channel_management_title": "📺 Channel management:",
         "modes_menu_title": "🧠 Modes settings:",
-        "creative_menu_title": "✨ Creative mode helps you create original channel posts in your own style.\n\nBest way to start:\n1) Set your prompt.\n2) Tap Preview to quickly check how posts look.\n3) Use Content Plan if you want a week of ideas.\n4) Open Source Center to add better materials.\n5) Adjust Content Variety if posts feel too similar.\n6) Use Visual Support for image ideas.\n7) Open Scheduling when you are ready to automate posting.\n\nEssential: Prompt + Preview.\nOptional: Content Plan, Source Center, Variety, Visual Support.",
-        "rss_menu_title": "📰 RSS + AI settings\n\nRecommended path for first success:\n1) Add first feed\n2) Set/confirm prompt\n3) Set posting mode + timezone\n4) Enable posting\n5) Run preview",
+        "creative_menu_title": "✨ Create original posts in your channel style.\n\nStart here:\n1) Set your style prompt\n2) Run Preview\n3) Open Scheduling when you're ready to automate\n\nOptional tools:\n• Content Plan (weekly ideas)\n• Source Center (materials)\n• Content Variety\n• Visual Support",
+        "rss_menu_title": "📰 RSS + AI settings\n\nStart path:\n1) Add first feed\n2) Set or confirm prompt/style\n3) Configure posting mode + timezone\n4) Enable posting\n5) Run Preview",
         "rss_primary_next_feed": "👉 Most important now: add your first feed. You can fine-tune format and extras later.",
         "rss_primary_next_prompt": "👉 Great, source is connected. Next: set or confirm your prompt/style.",
         "rss_primary_next_schedule": "👉 Next: open Scheduling, choose posting mode, and confirm timezone.",
@@ -80,17 +80,17 @@ TEXTS = {
         "schedule_mode_title_rss": "📰 RSS + AI scheduling",
         "schedule_mode_title_creative": "✨ Creative scheduling",
         "schedule_guided_intro":
-            "How to set this safely:\n"
-            "1) Choose Posting mode first.\n"
-            "2) Set either time slots (Edit Schedule) or interval minutes.\n"
-            "3) Add blocked hours if you want to avoid nights or ad windows.\n"
-            "4) Set freshness so old items are skipped.\n"
-            "5) Verify timezone (critical for relevant RSS/news timing).\n"
-            "6) Turn posting ON.\n\n"
-            "Practical tips:\n"
-            "• Interval mode is better for active news channels.\n"
-            "• Scheduled Times are better for controlled publishing windows.\n"
-            "• Too many restrictions can delay or skip useful posts.",
+            "Set this in order:\n"
+            "1) Choose posting mode\n"
+            "2) Set slots (Edit Schedule) or interval\n"
+            "3) Add blocked hours if needed\n"
+            "4) Set freshness window\n"
+            "5) Confirm timezone\n"
+            "6) Turn posting ON\n\n"
+            "Tips:\n"
+            "• Interval works best for active feeds.\n"
+            "• Scheduled Times works best for fixed publishing windows.\n"
+            "• Too many limits can delay useful posts.",
         "schedule_current": "Current schedule:\n{schedule}",
         "schedule_input_instructions": "Send posting times in 24h format, comma-separated.\nExamples:\n09:00\n09:00, 15:00, 21:30\n\nSend \"clear\" to remove all slots.",
         "schedule_invalid": "❌ Invalid format. Use HH:MM or HH:MM, HH:MM",
@@ -108,6 +108,9 @@ TEXTS = {
         "schedule_empty_slots": "(not set)",
         "schedule_not_set": "not set",
         "schedule_blocked_hours_off": "OFF",
+        "schedule_status_on": "LIVE",
+        "schedule_status_off": "OFF",
+        "schedule_times_empty": "(empty)",
         "schedule_summary_channel": "• Channel: {channel}",
         "schedule_summary_mode": "• Posting mode: {mode}",
         "schedule_summary_slots": "• Schedule / interval: {slots}",
@@ -145,10 +148,10 @@ TEXTS = {
         "status_live_mode_section": "Mode: {mode}",
         "preview_no_feeds": "No feeds. Add one first: /addfeed <url>",
         "preview_no_items_warning": "⚠️ No new unseen items found.\nThis is normal if:\n- feed has already been processed\n- no new posts yet\n\nTry again later or add another feed.",
-        "preview_empty_no_feed": "No feed is connected yet for this channel.\n\nWhat to do next:\n• add your first feed\n• then run Preview again",
-        "preview_empty_feed_no_items": "This feed is connected, but currently has no readable items.\n\nWhat to do next:\n• try another source\n• or check again later",
-        "preview_empty_all_processed": "No unseen items right now — this can be normal.\nThe feed may already be processed or nothing new has been published yet.\n\nWhat to do next:\n• try again later\n• or add one more feed",
-        "preview_empty_filtered": "Items exist, but none passed current freshness/relevance rules for preview.\n\nWhat to do next:\n• check if the feed has recent posts\n• increase freshness window or try another source",
+        "preview_empty_no_feed": "No feed connected for this channel yet.\n\nNext step:\n• add your first feed\n• then run Preview again",
+        "preview_empty_feed_no_items": "Feed is connected, but there are no readable items right now.\n\nNext step:\n• try another source\n• or check again later",
+        "preview_empty_all_processed": "No unseen items right now — this is often normal.\nThe feed may be already processed or nothing new is published yet.\n\nNext step:\n• try again later\n• or add one more feed",
+        "preview_empty_filtered": "Items were found, but none passed current freshness/relevance rules.\n\nNext step:\n• check if the feed has recent posts\n• increase freshness window or try another source",
         "preview_fallback_text_only": "Could not build image preview, so text preview is shown below.",
         "preview_temporarily_unavailable": "Preview is temporarily unavailable for this setup.",
         "preview_stage_config_failed": "Could not load the selected mode/channel for preview.",
@@ -164,15 +167,15 @@ TEXTS = {
         "feed_management_help": "Tip: Send a direct RSS URL, or send an X/Twitter profile link and the bot will create RSS automatically.",
         "feed_limit_status": "Feeds used: {count}/{limit}",
         "feed_name_prompt": "Send a short name for this feed, or send \"-\" to skip.",
-        "feed_processing": "Processing your feed...",
-        "feed_recovery_invalid": "This link does not look like a valid RSS feed.\n\nWhat to try next:\n• send a direct RSS/XML URL\n• or send an X profile link (example: https://x.com/username)",
-        "feed_recovery_x_transform_failed": "I couldn't convert this X/Twitter profile into a readable RSS feed right now.\n\nWhat to try next:\n• try another profile link\n• or send a direct RSS URL",
+        "feed_processing": "⏳ Checking and adding your feed...",
+        "feed_recovery_invalid": "This link doesn't look like a valid RSS feed.\n\nTry this:\n• send a direct RSS/XML URL\n• or send an X profile link (example: https://x.com/username)",
+        "feed_recovery_x_transform_failed": "I couldn't convert this X/Twitter profile into a readable RSS feed right now.\n\nTry this:\n• send another profile link\n• or send a direct RSS URL",
         "feed_recovery_x_status": "This looks like a post/status link.\n\nWhat to try next:\n• send the profile link instead\nExample: https://x.com/username",
         "feed_recovery_x_profile_invalid": "This X/Twitter profile link could not be recognized.\n\nWhat to try next:\n• send only the profile URL\nExample: https://x.com/username",
-        "feed_recovery_empty": "This feed exists but currently has no readable items.\n\nWhat to try next:\n• try another source\n• or check again later",
-        "feed_recovery_unreachable": "I couldn't reach this feed right now.\n\nWhat to try next:\n• check the link in your browser\n• try again in a few minutes",
+        "feed_recovery_empty": "This feed exists, but currently has no readable items.\n\nTry this:\n• use another source\n• or check again later",
+        "feed_recovery_unreachable": "I couldn't reach this feed right now.\n\nTry this:\n• open the link in your browser\n• try again in a few minutes",
         "feed_recovery_unsupported": "This page is reachable, but it does not return a supported RSS/Atom format.\n\nWhat to try next:\n• send a direct RSS/XML feed URL\n• or choose another source",
-        "rss_first_success_feed": "🎉 Great, your first source is connected.\nNext: set your style prompt, then choose schedule + timezone.\nYou can preview output before going live.",
+        "rss_first_success_feed": "✅ First source connected.\nNext: set your style prompt, then choose schedule + timezone.\nRun Preview before going live.",
         "btn_lang": "🌐 Language",
         "choose_lang": "Choose your language:",
         "btn_setup": "🛠 Setup",
@@ -560,8 +563,8 @@ TEXTS = {
         "scheduling_menu_title": "🕒 Расписание:",
         "channel_management_title": "📺 Управление каналом:",
         "modes_menu_title": "🧠 Настройки режимов:",
-        "creative_menu_title": "✨ Creative-режим помогает делать оригинальные посты для канала в вашем стиле.\n\nКак удобнее начать:\n1) Задайте промпт.\n2) Нажмите Превью и быстро проверьте результат.\n3) Используйте Контент-план, если хотите идеи на неделю.\n4) Откройте Центр источников, чтобы дать боту материалы.\n5) Настройте Разнообразие контента, если посты слишком похожи.\n6) Используйте Визуальную поддержку для идей изображений.\n7) Откройте Расписание, когда будете готовы к автопостингу.\n\nОбязательно: Промпт + Превью.\nОпционально: Контент-план, Центр источников, Разнообразие, Визуальная поддержка.",
-        "rss_menu_title": "📰 Настройки RSS + AI\n\nРекомендуемый путь для первого результата:\n1) Добавьте первую ленту\n2) Задайте/проверьте промпт\n3) Выберите режим публикации + часовой пояс\n4) Включите публикацию\n5) Запустите превью",
+        "creative_menu_title": "✨ Создавайте оригинальные посты в стиле вашего канала.\n\nСтартовый путь:\n1) Задайте стиль (промпт)\n2) Запустите Превью\n3) Откройте Расписание, когда будете готовы к автопостингу\n\nДополнительно:\n• Контент-план (идеи на неделю)\n• Центр источников (материалы)\n• Разнообразие контента\n• Визуальная поддержка",
+        "rss_menu_title": "📰 Настройки RSS + AI\n\nПуть запуска:\n1) Добавьте первую ленту\n2) Задайте или проверьте промпт/стиль\n3) Настройте режим публикации + часовой пояс\n4) Включите публикацию\n5) Запустите Превью",
         "rss_primary_next_feed": "👉 Самый важный шаг сейчас: добавьте первую ленту. Остальные настройки можно сделать позже.",
         "rss_primary_next_prompt": "👉 Отлично, источник подключён. Следующий шаг: задайте или проверьте промпт/стиль.",
         "rss_primary_next_schedule": "👉 Дальше откройте Расписание: выберите режим публикации и проверьте часовой пояс.",
@@ -581,17 +584,17 @@ TEXTS = {
         "schedule_mode_title_rss": "📰 Планировщик RSS + AI",
         "schedule_mode_title_creative": "✨ Планировщик Creative",
         "schedule_guided_intro":
-            "Как настроить безопасно и понятно:\n"
-            "1) Сначала выберите режим публикации.\n"
-            "2) Настройте либо слоты (Изменить расписание), либо интервал.\n"
-            "3) При необходимости добавьте заблокированные часы (ночь, реклама).\n"
-            "4) Поставьте порог свежести, чтобы отсеивать устаревшие новости.\n"
-            "5) Проверьте часовой пояс (критично для RSS/новостей).\n"
-            "6) Включите публикацию.\n\n"
-            "Практические советы:\n"
-            "• Режим Интервал лучше для активных новостных каналов.\n"
-            "• Режим Слоты лучше для строго контролируемых окон.\n"
-            "• Слишком много ограничений может уменьшить полезные публикации.",
+            "Настройте по шагам:\n"
+            "1) Выберите режим публикации\n"
+            "2) Задайте слоты (Изменить расписание) или интервал\n"
+            "3) При необходимости добавьте заблокированные часы\n"
+            "4) Установите порог свежести\n"
+            "5) Проверьте часовой пояс\n"
+            "6) Включите публикацию\n\n"
+            "Подсказки:\n"
+            "• Интервал лучше для активных лент.\n"
+            "• По времени лучше для фиксированных окон публикаций.\n"
+            "• Слишком много ограничений может задерживать полезные посты.",
         "schedule_current": "Текущее расписание:\n{schedule}",
         "schedule_input_instructions": "Отправьте время публикаций в формате 24ч через запятую.\nПримеры:\n09:00\n09:00, 15:00, 21:30\n\nОтправьте \"clear\", чтобы удалить все слоты.",
         "schedule_invalid": "❌ Неверный формат. Используйте HH:MM или HH:MM, HH:MM",
@@ -609,6 +612,9 @@ TEXTS = {
         "schedule_empty_slots": "(не задано)",
         "schedule_not_set": "не задан",
         "schedule_blocked_hours_off": "ВЫКЛ",
+        "schedule_status_on": "LIVE",
+        "schedule_status_off": "ВЫКЛ",
+        "schedule_times_empty": "(пусто)",
         "schedule_summary_channel": "• Канал: {channel}",
         "schedule_summary_mode": "• Режим публикации: {mode}",
         "schedule_summary_slots": "• Расписание / интервал: {slots}",
@@ -646,10 +652,10 @@ TEXTS = {
         "status_live_mode_section": "Режим: {mode}",
         "preview_no_feeds": "Нет RSS-лент. Сначала добавьте: /addfeed <url>",
         "preview_no_items_warning": "⚠️ Новых непоказанных записей не найдено.\nЭто нормально, если:\n- лента уже была обработана\n- новых публикаций пока нет\n\nПопробуйте позже или добавьте ещё одну ленту.",
-        "preview_empty_no_feed": "Для этого канала пока не подключена ни одна лента.\n\nЧто делать дальше:\n• добавьте первую ленту\n• затем снова запустите Превью",
-        "preview_empty_feed_no_items": "Лента подключена, но сейчас в ней нет читаемых записей.\n\nЧто делать дальше:\n• попробуйте другой источник\n• или проверьте снова позже",
-        "preview_empty_all_processed": "Сейчас нет непоказанных записей — это нормально.\nЛента могла уже быть обработана, либо новых публикаций пока нет.\n\nЧто делать дальше:\n• попробуйте позже\n• или добавьте ещё одну ленту",
-        "preview_empty_filtered": "Записи есть, но ни одна не прошла текущие фильтры свежести/релевантности для превью.\n\nЧто делать дальше:\n• проверьте, есть ли в ленте свежие посты\n• увеличьте окно свежести или попробуйте другой источник",
+        "preview_empty_no_feed": "Для этого канала пока нет подключённых лент.\n\nСледующий шаг:\n• добавьте первую ленту\n• затем снова запустите Превью",
+        "preview_empty_feed_no_items": "Лента подключена, но сейчас в ней нет читаемых записей.\n\nСледующий шаг:\n• попробуйте другой источник\n• или проверьте позже",
+        "preview_empty_all_processed": "Сейчас нет непоказанных записей — это часто нормально.\nЛента могла уже обработаться, либо новых публикаций пока нет.\n\nСледующий шаг:\n• попробуйте позже\n• или добавьте ещё одну ленту",
+        "preview_empty_filtered": "Записи найдены, но ни одна не прошла текущие фильтры свежести/релевантности.\n\nСледующий шаг:\n• проверьте, есть ли в ленте свежие посты\n• увеличьте окно свежести или попробуйте другой источник",
         "preview_fallback_text_only": "Не удалось собрать изображение, поэтому ниже показан текстовый превью-вариант.",
         "preview_temporarily_unavailable": "Сейчас не удалось создать превью для этой настройки.",
         "preview_stage_config_failed": "Не удалось получить данные канала или режима для превью.",
@@ -665,15 +671,15 @@ TEXTS = {
         "feed_management_help": "Подсказка: отправьте прямую RSS-ссылку или ссылку на профиль X/Twitter — бот создаст RSS автоматически.",
         "feed_limit_status": "Использовано лент: {count}/{limit}",
         "feed_name_prompt": "Отправьте короткое название для этой ленты или отправьте \"-\" чтобы пропустить.",
-        "feed_processing": "Обрабатываю вашу ленту...",
-        "feed_recovery_invalid": "Эта ссылка не похожа на корректную RSS-ленту.\n\nЧто попробовать:\n• отправьте прямую RSS/XML ссылку\n• или отправьте ссылку на профиль X (пример: https://x.com/username)",
-        "feed_recovery_x_transform_failed": "Сейчас не удалось преобразовать этот профиль X/Twitter в читаемую RSS-ленту.\n\nЧто попробовать:\n• отправьте другой профиль\n• или отправьте прямую RSS-ссылку",
+        "feed_processing": "⏳ Проверяю и подключаю ленту...",
+        "feed_recovery_invalid": "Эта ссылка не похожа на корректную RSS-ленту.\n\nПопробуйте:\n• отправить прямую RSS/XML ссылку\n• или отправить ссылку на профиль X (пример: https://x.com/username)",
+        "feed_recovery_x_transform_failed": "Сейчас не удалось преобразовать этот профиль X/Twitter в читаемую RSS-ленту.\n\nПопробуйте:\n• отправить другой профиль\n• или отправить прямую RSS-ссылку",
         "feed_recovery_x_status": "Похоже, это ссылка на отдельный пост/status.\n\nЧто попробовать:\n• отправьте ссылку на профиль\nПример: https://x.com/username",
         "feed_recovery_x_profile_invalid": "Не удалось распознать ссылку на профиль X/Twitter.\n\nЧто попробовать:\n• отправьте только URL профиля\nПример: https://x.com/username",
-        "feed_recovery_empty": "Эта лента существует, но сейчас в ней нет читаемых записей.\n\nЧто попробовать:\n• выбрать другой источник\n• или попробовать позже",
-        "feed_recovery_unreachable": "Сейчас не удалось получить доступ к этой ленте.\n\nЧто попробовать:\n• откройте ссылку в браузере и проверьте доступность\n• повторите через несколько минут",
+        "feed_recovery_empty": "Лента существует, но сейчас в ней нет читаемых записей.\n\nПопробуйте:\n• выбрать другой источник\n• или проверить позже",
+        "feed_recovery_unreachable": "Сейчас не удалось получить доступ к этой ленте.\n\nПопробуйте:\n• открыть ссылку в браузере и проверить доступность\n• повторить через несколько минут",
         "feed_recovery_unsupported": "Страница доступна, но возвращает неподдерживаемый формат (не RSS/Atom).\n\nЧто попробовать:\n• отправьте прямую RSS/XML ссылку\n• или выберите другой источник",
-        "rss_first_success_feed": "🎉 Отлично, первый источник подключён.\nДальше: задайте стиль/промпт, затем выберите расписание и часовой пояс.\nПеред запуском можно сделать превью.",
+        "rss_first_success_feed": "✅ Первый источник подключён.\nДальше: задайте стиль/промпт, затем выберите расписание и часовой пояс.\nПеред запуском сделайте Превью.",
         "btn_lang": "🌐 Язык",
         "choose_lang": "Выберите язык:",
         "btn_setup": "🛠 Настройка",
