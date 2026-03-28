@@ -63,6 +63,18 @@ TEXTS = {
         "rss_menu_title": "📰 RSS + AI settings\n\n✍️ Set your prompt.\n🧾 Add feeds for news sources.\n🧩 Open Post Format and tune output.\n🕒 Open Scheduling and choose: Scheduled Times or Interval.\n✅ For Scheduled Times, add slots and turn Scheduling ON.\n🚀 Run /autoposton to start posting (next slot or by interval).\n🧪 Tap Preview to check the final result.\n⚠️ Scheduling and quiet hours use your selected timezone.",
         "schedule_mode_title_rss": "📰 RSS + AI scheduling",
         "schedule_mode_title_creative": "✨ Creative scheduling",
+        "schedule_guided_intro":
+            "How to set this safely:\n"
+            "1) Choose Posting mode first.\n"
+            "2) Set either time slots (Edit Schedule) or interval minutes.\n"
+            "3) Add blocked hours if you want to avoid nights or ad windows.\n"
+            "4) Set freshness so old items are skipped.\n"
+            "5) Verify timezone (critical for relevant RSS/news timing).\n"
+            "6) Turn posting ON.\n\n"
+            "Practical tips:\n"
+            "• Interval mode is better for active news channels.\n"
+            "• Scheduled Times are better for controlled publishing windows.\n"
+            "• Too many restrictions can delay or skip useful posts.",
         "schedule_current": "Current schedule:\n{schedule}",
         "schedule_input_instructions": "Send posting times in 24h format, comma-separated.\nExamples:\n09:00\n09:00, 15:00, 21:30\n\nSend \"clear\" to remove all slots.",
         "schedule_invalid": "❌ Invalid format. Use HH:MM or HH:MM, HH:MM",
@@ -80,14 +92,15 @@ TEXTS = {
         "schedule_empty_slots": "(not set)",
         "schedule_not_set": "not set",
         "schedule_blocked_hours_off": "OFF",
-        "schedule_summary_channel": "Channel: {channel}",
-        "schedule_summary_mode": "Posting mode: {mode}",
-        "schedule_summary_slots": "Schedule / interval slots: {slots}",
-        "schedule_summary_timezone": "Channel timezone: {timezone}",
-        "schedule_summary_blocked": "Blocked hours: {blocked}",
-        "schedule_summary_freshness": "Freshness threshold: {minutes} min",
-        "schedule_summary_status": "Posting status: {status}",
-        "schedule_summary_next_run": "Next run: {next_run}",
+        "schedule_summary_channel": "• Channel: {channel}",
+        "schedule_summary_mode": "• Posting mode: {mode}",
+        "schedule_summary_slots": "• Schedule / interval: {slots}",
+        "schedule_summary_timezone": "• Timezone: {timezone}",
+        "schedule_summary_blocked": "• Blocked hours: {blocked}",
+        "schedule_summary_freshness": "• Freshness: {minutes} min",
+        "schedule_summary_status": "• Posting status: {status}",
+        "schedule_summary_next_run": "• Next run: {next_run}",
+        "schedule_summary_title": "Current setup:",
         "preview_no_feeds": "No feeds. Add one first: /addfeed <url>",
         "preview_fallback_text_only": "Could not build image preview, so text preview is shown below.",
         "preview_temporarily_unavailable": "Preview is temporarily unavailable for this setup.",
@@ -488,6 +501,18 @@ TEXTS = {
         "rss_menu_title": "📰 Настройки RSS + AI\n\n✍️ Задайте промпт.\n🧾 Добавьте ленты-источники.\n🧩 Откройте Формат поста и настройте вывод.\n🕒 Откройте Расписание и выберите: По времени или По интервалу.\n✅ Для режима По времени задайте слоты и включите Расписание.\n🚀 Выполните /autoposton для запуска публикаций (в ближайший слот или по интервалу).\n🧪 Нажмите Превью, чтобы посмотреть итог.\n⚠️ Расписание и тихие часы работают по выбранному часовому поясу.",
         "schedule_mode_title_rss": "📰 Планировщик RSS + AI",
         "schedule_mode_title_creative": "✨ Планировщик Creative",
+        "schedule_guided_intro":
+            "Как настроить безопасно и понятно:\n"
+            "1) Сначала выберите режим публикации.\n"
+            "2) Настройте либо слоты (Изменить расписание), либо интервал.\n"
+            "3) При необходимости добавьте заблокированные часы (ночь, реклама).\n"
+            "4) Поставьте порог свежести, чтобы отсеивать устаревшие новости.\n"
+            "5) Проверьте часовой пояс (критично для RSS/новостей).\n"
+            "6) Включите публикацию.\n\n"
+            "Практические советы:\n"
+            "• Режим Интервал лучше для активных новостных каналов.\n"
+            "• Режим Слоты лучше для строго контролируемых окон.\n"
+            "• Слишком много ограничений может уменьшить полезные публикации.",
         "schedule_current": "Текущее расписание:\n{schedule}",
         "schedule_input_instructions": "Отправьте время публикаций в формате 24ч через запятую.\nПримеры:\n09:00\n09:00, 15:00, 21:30\n\nОтправьте \"clear\", чтобы удалить все слоты.",
         "schedule_invalid": "❌ Неверный формат. Используйте HH:MM или HH:MM, HH:MM",
@@ -505,14 +530,15 @@ TEXTS = {
         "schedule_empty_slots": "(не задано)",
         "schedule_not_set": "не задан",
         "schedule_blocked_hours_off": "ВЫКЛ",
-        "schedule_summary_channel": "Канал: {channel}",
-        "schedule_summary_mode": "Режим публикации: {mode}",
-        "schedule_summary_slots": "Слоты расписания / интервала: {slots}",
-        "schedule_summary_timezone": "Часовой пояс канала: {timezone}",
-        "schedule_summary_blocked": "Заблокированные часы: {blocked}",
-        "schedule_summary_freshness": "Порог свежести: {minutes} мин",
-        "schedule_summary_status": "Статус публикаций: {status}",
-        "schedule_summary_next_run": "Следующий запуск: {next_run}",
+        "schedule_summary_channel": "• Канал: {channel}",
+        "schedule_summary_mode": "• Режим публикации: {mode}",
+        "schedule_summary_slots": "• Расписание / интервал: {slots}",
+        "schedule_summary_timezone": "• Часовой пояс: {timezone}",
+        "schedule_summary_blocked": "• Заблокированные часы: {blocked}",
+        "schedule_summary_freshness": "• Порог свежести: {minutes} мин",
+        "schedule_summary_status": "• Статус публикаций: {status}",
+        "schedule_summary_next_run": "• Следующий запуск: {next_run}",
+        "schedule_summary_title": "Текущая конфигурация:",
         "preview_no_feeds": "Нет RSS-лент. Сначала добавьте: /addfeed <url>",
         "preview_fallback_text_only": "Не удалось собрать изображение, поэтому ниже показан текстовый превью-вариант.",
         "preview_temporarily_unavailable": "Сейчас не удалось создать превью для этой настройки.",
