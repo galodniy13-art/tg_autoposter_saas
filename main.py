@@ -3640,7 +3640,9 @@ def schedule_summary_for_mode(cfg: dict, mode: str) -> str:
     next_run = _parse_local_iso_datetime(cfg.get(_interval_next_run_key(mode)) or "")
     next_text = next_run.strftime("%Y-%m-%d %H:%M") if next_run else ui_text(cfg, "schedule_not_set")
     return (
-        ui_text(cfg, "schedule_summary_channel").format(channel=channel_display_name(cfg, cfg.get("channel") or "—"))
+        ui_text(cfg, "schedule_summary_title")
+        + "\n"
+        + ui_text(cfg, "schedule_summary_channel").format(channel=channel_display_name(cfg, cfg.get("channel") or "—"))
         + "\n"
         + ui_text(cfg, "schedule_summary_mode").format(mode=posting_mode)
         + "\n"
@@ -4100,6 +4102,8 @@ def schedule_mode_menu_text(cfg: dict, mode: str) -> str:
     return (
         ui_text(cfg, schedule_mode_title_key(mode))
         + "\n\n"
+        + ui_text(cfg, "schedule_guided_intro")
+        + "\n\n"
         + ui_text(cfg, "schedule_interval_current").format(interval=interval_min)
         + "\n"
         + ui_text(cfg, "schedule_timezone").format(timezone=user_timezone_label(cfg))
@@ -4291,12 +4295,16 @@ def selected_channel_text(cfg: dict, channel: str) -> str:
 
 
 def clear_mode_channel_selection(context: ContextTypes.DEFAULT_TYPE) -> None:
+    prev = context.user_data.get("mode_selected_channel")
+    if prev:
+        logger.info("[CHANNEL_CONTEXT] action=clear previous=%s", prev)
     context.user_data.pop("mode_selected_channel", None)
     # cleanup legacy state key
     context.user_data.pop("mode_selected_channel_idx", None)
 
 
 def set_mode_channel_selection(context: ContextTypes.DEFAULT_TYPE, channel: str) -> None:
+    logger.info("[CHANNEL_CONTEXT] action=set channel=%s", channel)
     context.user_data["mode_selected_channel"] = channel
     # cleanup legacy state key
     context.user_data.pop("mode_selected_channel_idx", None)
@@ -4315,12 +4323,8 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
     if not channels:
         clear_mode_channel_selection(context)
         context.user_data.pop("active_channel_idx", None)
+        logger.info("[CHANNEL_CONTEXT] action=require result=empty action=%s", action)
         return None, "empty"
-    if len(channels) == 1:
-        set_mode_channel_selection(context, channels[0])
-        context.user_data["active_channel_idx"] = 0
-        switch_active_channel(cfg, channels[0])
-        return channels[0], None
 
     if action in {"creative_menu", "rss_menu"}:
         selected_channel = context.user_data.get("mode_selected_channel")
@@ -4344,6 +4348,7 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
             switch_active_channel(cfg, current_channel)
             return current_channel, None
         logger.info("[NAV_PARENT] action=%s resolved=pick_required", action)
+        logger.info("[CHANNEL_CONTEXT] action=require result=pick action=%s", action)
         return None, "pick"
 
     explicit_selection_actions = {
@@ -4405,6 +4410,7 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
             switch_active_channel(cfg, current_channel)
             return current_channel, None
         clear_mode_channel_selection(context)
+        logger.info("[CHANNEL_CONTEXT] action=require result=pick action=%s", action)
         return None, "pick"
 
     idx = context.user_data.get("active_channel_idx")
@@ -4412,6 +4418,7 @@ def require_channel_context(cfg: dict, context: ContextTypes.DEFAULT_TYPE, actio
         switch_active_channel(cfg, channels[idx])
         return channels[idx], None
 
+    logger.info("[CHANNEL_CONTEXT] action=require result=pick action=%s", action)
     return None, "pick"
 
 
@@ -4641,12 +4648,15 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             mode = "creative" if action == "schedule_creative_timezone" else "rss"
             context.user_data["awaiting_timezone_mode"] = mode
             q.data = "ui:schedule:timezone"
+        elif action == "setup_modes":
+            q.data = "ui:modes"
         else:
             await q.message.reply_text(selected_channel_text(cfg, selected))
             return
         data = q.data or ""
 
     if data == "ui:setup":
+        logger.info("[NAV_ENTER] screen=setup")
         clear_mode_channel_selection(context)
         await q.answer()
         try:
@@ -4674,12 +4684,33 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:modes":
-        clear_mode_channel_selection(context)
+        channels = get_saved_channels(cfg)
+        selected = context.user_data.get("mode_selected_channel")
+        if not channels:
+            clear_mode_channel_selection(context)
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if not isinstance(selected, str) or selected not in channels:
+            clear_mode_channel_selection(context)
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "setup_modes", "ui:setup"),
+            )
+            return
+        logger.info("[NAV_ENTER] screen=modes channel=%s", selected)
         await q.answer()
         try:
-            await q.edit_message_text(text=ui_text(cfg, "modes_menu_title"), reply_markup=build_modes_submenu(cfg))
+            await q.edit_message_text(
+                text=ui_text(cfg, "modes_menu_title") + "\n\n" + selected_channel_text(cfg, selected),
+                reply_markup=build_modes_submenu(cfg),
+            )
         except BadRequest:
-            await q.message.reply_text(text=ui_text(cfg, "modes_menu_title"), reply_markup=build_modes_submenu(cfg))
+            await q.message.reply_text(
+                text=ui_text(cfg, "modes_menu_title") + "\n\n" + selected_channel_text(cfg, selected),
+                reply_markup=build_modes_submenu(cfg),
+            )
         return
 
     if data == "ui:mode:creative:menu":
@@ -4697,6 +4728,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 reply_markup=build_channel_picker(cfg, "creative_menu", "ui:modes"),
             )
             return
+        logger.info("[NAV_ENTER] screen=creative_menu channel=%s", selected)
         await q.answer()
         text = ui_text(cfg, "creative_menu_title") + "\n\n" + selected_channel_text(cfg, selected)
         try:
@@ -5208,6 +5240,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 reply_markup=build_channel_picker(cfg, "rss_menu", "ui:modes"),
             )
             return
+        logger.info("[NAV_ENTER] screen=rss_menu channel=%s", selected)
         await q.answer()
         text = ui_text(cfg, "rss_menu_title") + "\n\n" + selected_channel_text(cfg, selected)
         try:
@@ -5390,6 +5423,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 reply_markup=build_channel_picker(cfg, action, f"ui:mode:{mode}:menu"),
             )
             return
+        logger.info("[NAV_ENTER] screen=schedule_menu mode=%s channel=%s", mode, selected)
         _, tz_reason = ensure_channel_timezone(cfg, selected)
         if tz_reason != "existing":
             save_client(user_id, cfg)
