@@ -2002,10 +2002,65 @@ def _watermark_ratios(cfg: dict, mode: str = "rss") -> tuple[float, float, float
         margin_ratio = float(margin_pct) / 100.0
     except (TypeError, ValueError):
         margin_ratio = 0.035
-    scale_ratio = min(0.14, max(0.09, scale_ratio))
-    margin_ratio = min(0.06, max(0.025, margin_ratio))
-    margin_y_ratio = min(0.07, max(0.025, margin_ratio * 1.1))
+    scale_ratio = min(0.11, max(0.06, scale_ratio))
+    margin_ratio = min(0.07, max(0.03, margin_ratio))
+    margin_y_ratio = min(0.08, max(0.03, margin_ratio * 1.05))
     return scale_ratio, margin_ratio, margin_y_ratio
+
+
+def _select_compose_strategy(
+    canvas_w: int,
+    canvas_h: int,
+    source_w: int,
+    source_h: int,
+) -> tuple[str, str | None, str, dict]:
+    margin_x = max(8, int(canvas_w * 0.08))
+    margin_y = max(8, int(canvas_h * 0.08))
+    area_w = max(1, canvas_w - 2 * margin_x)
+    area_h = max(1, canvas_h - 2 * margin_y)
+    source_ratio = source_w / max(1, source_h)
+    area_ratio = area_w / max(1, area_h)
+    aspect_mismatch = abs(math.log(max(0.01, source_ratio / max(0.01, area_ratio))))
+
+    contain_scale = min(area_w / max(1, source_w), area_h / max(1, source_h))
+    contain_w = max(1, int(source_w * contain_scale))
+    contain_h = max(1, int(source_h * contain_scale))
+    rendered_area_ratio = (contain_w * contain_h) / max(1, canvas_w * canvas_h)
+    min_render_side_ratio = min(contain_w / max(1, canvas_w), contain_h / max(1, canvas_h))
+
+    fit_mode = "contain"
+    if 0.85 <= source_ratio <= 1.9 and aspect_mismatch <= 0.16:
+        fit_mode = "cover"
+    elif source_ratio < 0.70 or source_ratio > 2.30:
+        fit_mode = "padded_contain"
+
+    reject_reason = None
+    if min(source_w, source_h) < 300:
+        reject_reason = "source_too_small_pixels"
+    elif rendered_area_ratio < 0.33:
+        reject_reason = "rendered_area_too_small"
+    elif min(contain_w, contain_h) < 320:
+        reject_reason = "rendered_min_side_too_small"
+    elif min_render_side_ratio < 0.38:
+        reject_reason = "rendered_relative_size_too_small"
+    elif aspect_mismatch > 1.05 and source_ratio < 0.75:
+        reject_reason = "severe_aspect_mismatch_portrait"
+
+    mode = "use_background" if reject_reason is None else "use_original"
+    metrics = {
+        "margin_x": margin_x,
+        "margin_y": margin_y,
+        "area_w": area_w,
+        "area_h": area_h,
+        "source_ratio": source_ratio,
+        "area_ratio": area_ratio,
+        "aspect_mismatch": aspect_mismatch,
+        "rendered_area_ratio": rendered_area_ratio,
+        "contain_w": contain_w,
+        "contain_h": contain_h,
+        "min_render_side_ratio": min_render_side_ratio,
+    }
+    return mode, reject_reason, fit_mode, metrics
 
 
 def _apply_watermark_to_canvas(
@@ -2099,6 +2154,9 @@ def _watermark_original_image_with_status(
 
     logger.info("[CANVAS_SIZE] branch=%s width=%s height=%s", branch, img.width, img.height)
     logger.info("[SRC_IMAGE_SIZE] branch=%s width=%s height=%s", branch, img.width, img.height)
+    logger.info("[SRC_ASPECT] branch=%s ratio=%.4f", branch, img.width / max(1, img.height))
+    logger.info("[COMPOSE_MODE] branch=%s mode=use_original", branch)
+    logger.info("[COMPOSE_USE_ORIGINAL] branch=%s reason=watermark_on_original", branch)
     logger.info("[FIT_MODE] branch=%s mode=source_original", branch)
     if not _apply_watermark_to_canvas(img, watermark_path, cfg, mode=mode, branch=branch):
         logger.warning("[WM_APPLY_FAIL] branch=%s reason=watermark_apply_failed_fallback_to_unwatermarked", branch)
@@ -2444,24 +2502,44 @@ def _compose_rss_image_with_status(
         return None, "rss_image_rejected"
 
     try:
-
         canvas_w, canvas_h = base.size
-        margin_x = max(8, int(canvas_w * 0.08))
-        margin_y = max(8, int(canvas_h * 0.08))
-        area_w = max(1, canvas_w - 2 * margin_x)
-        area_h = max(1, canvas_h - 2 * margin_y)
-
         logger.info("[CANVAS_SIZE] branch=template_compose width=%s height=%s", canvas_w, canvas_h)
         logger.info("[SRC_IMAGE_SIZE] branch=template_compose width=%s height=%s", rss_img.width, rss_img.height)
 
-        source_ratio = rss_img.width / max(1, rss_img.height)
-        area_ratio = area_w / max(1, area_h)
-        ratio_delta = abs(math.log(max(0.01, source_ratio / max(0.01, area_ratio))))
-        if 0.9 <= source_ratio <= 1.9 and ratio_delta < 0.22:
-            fit_mode = "cover"
-        else:
-            fit_mode = "contain"
-        logger.info("[FIT_MODE] branch=template_compose mode=%s source_ratio=%.4f area_ratio=%.4f", fit_mode, source_ratio, area_ratio)
+        compose_mode, reject_reason, fit_mode, metrics = _select_compose_strategy(
+            canvas_w=canvas_w,
+            canvas_h=canvas_h,
+            source_w=rss_img.width,
+            source_h=rss_img.height,
+        )
+        logger.info(
+            "[SRC_ASPECT] branch=template_compose ratio=%.4f mismatch=%.4f",
+            metrics["source_ratio"],
+            metrics["aspect_mismatch"],
+        )
+        logger.info(
+            "[COMPOSE_MODE] branch=template_compose mode=%s fit_mode=%s rendered_area_ratio=%.4f min_render_side_ratio=%.4f",
+            compose_mode,
+            fit_mode,
+            metrics["rendered_area_ratio"],
+            metrics["min_render_side_ratio"],
+        )
+        if reject_reason:
+            logger.info("[COMPOSE_REJECT_BACKGROUND] branch=template_compose reason=%s", reject_reason)
+            logger.info("[COMPOSE_USE_ORIGINAL] branch=template_compose reason=%s", reject_reason)
+            return None, "compose_unsuitable_background"
+        logger.info("[COMPOSE_USE_BACKGROUND] branch=template_compose fit_mode=%s", fit_mode)
+        logger.info(
+            "[FIT_MODE] branch=template_compose mode=%s source_ratio=%.4f area_ratio=%.4f",
+            fit_mode,
+            metrics["source_ratio"],
+            metrics["area_ratio"],
+        )
+
+        margin_x = metrics["margin_x"]
+        margin_y = metrics["margin_y"]
+        area_w = metrics["area_w"]
+        area_h = metrics["area_h"]
 
         if fit_mode == "cover":
             scale = max(area_w / max(1, rss_img.width), area_h / max(1, rss_img.height))
@@ -2477,6 +2555,17 @@ def _compose_rss_image_with_status(
             fitted_w = max(1, int(rss_img.width * scale))
             fitted_h = max(1, int(rss_img.height * scale))
             fitted = rss_img.resize((fitted_w, fitted_h), Image.Resampling.LANCZOS)
+            if fit_mode == "padded_contain":
+                panel_pad_x = max(6, int(canvas_w * 0.01))
+                panel_pad_y = max(6, int(canvas_h * 0.01))
+                panel = Image.new(
+                    "RGBA",
+                    (min(area_w, fitted_w + 2 * panel_pad_x), min(area_h, fitted_h + 2 * panel_pad_y)),
+                    (0, 0, 0, 56),
+                )
+                panel_x = margin_x + max(0, (area_w - panel.width) // 2)
+                panel_y = margin_y + max(0, (area_h - panel.height) // 2)
+                base.paste(panel, (panel_x, panel_y), panel)
         paste_x = margin_x + max(0, (area_w - fitted_w) // 2)
         paste_y = margin_y + max(0, (area_h - fitted_h) // 2)
         base.paste(fitted, (paste_x, paste_y), fitted)
@@ -2529,6 +2618,7 @@ def _compose_vertical_rss_image_with_optional_watermark(
             pass
 
     source_ratio = rss_img.width / max(1, rss_img.height)
+    logger.info("[SRC_ASPECT] branch=vertical_compose ratio=%.4f", source_ratio)
     if source_ratio >= 0.75:
         return None, False, None
 
@@ -2540,6 +2630,8 @@ def _compose_vertical_rss_image_with_optional_watermark(
     try:
         logger.info("[CANVAS_SIZE] branch=vertical_compose width=%s height=%s", rss_img.width, rss_img.height)
         logger.info("[SRC_IMAGE_SIZE] branch=vertical_compose width=%s height=%s", rss_img.width, rss_img.height)
+        logger.info("[COMPOSE_MODE] branch=vertical_compose mode=use_original")
+        logger.info("[COMPOSE_USE_ORIGINAL] branch=vertical_compose reason=portrait_original_strategy")
         logger.info("[FIT_MODE] branch=vertical_compose mode=source_original")
         if watermark_path and not _apply_watermark_to_canvas(rss_img, watermark_path, cfg or {}, mode="rss", branch="vertical_compose"):
             logger.warning("[WM_APPLY_FAIL] branch=vertical_compose reason=watermark_apply_failed_fallback_to_unwatermarked")
@@ -2616,6 +2708,9 @@ async def prepare_rss_image_for_sending(bot, cfg: dict, user_id: int, image_url:
             if fallback_wm_path:
                 return str(fallback_wm_path), fallback_wm_path
             logger.warning("[WM_APPLY_FAIL] branch=template_compose_fallback_original reason=%s", fallback_err)
+        if compose_error == "compose_unsuitable_background":
+            logger.info("[COMPOSE_REJECT_BACKGROUND] branch=prepare_send reason=compose_unsuitable_background")
+            logger.info("[COMPOSE_USE_ORIGINAL] branch=prepare_send reason=compose_unsuitable_background")
         logger.info("[IMG_FALLBACK_ORIGINAL] reason=%s url=%s", compose_error or "template_compose_failed", image_url)
         return image_url, None
     return str(composed_path), composed_path
@@ -2691,7 +2786,10 @@ async def prepare_rss_preview_image_for_sending(bot, cfg: dict, user_id: int, im
             if fallback_wm_path:
                 return str(fallback_wm_path), fallback_wm_path, None
             logger.warning("[WM_APPLY_FAIL] branch=preview_template_compose_fallback_original reason=%s", fallback_err)
-        if compose_error in {"rss_image_unusable", "rss_image_rejected"}:
+        if compose_error in {"rss_image_unusable", "rss_image_rejected", "compose_unsuitable_background"}:
+            if compose_error == "compose_unsuitable_background":
+                logger.info("[COMPOSE_REJECT_BACKGROUND] branch=prepare_preview reason=compose_unsuitable_background")
+                logger.info("[COMPOSE_USE_ORIGINAL] branch=prepare_preview reason=compose_unsuitable_background")
             logger.info("[IMG_FALLBACK_ORIGINAL] reason=%s url=%s", compose_error, image_url)
             return image_url, None, "preview_status_template_build_failed_normal"
         if compose_error in {"template_load_failed", "watermark_apply_failed"}:
