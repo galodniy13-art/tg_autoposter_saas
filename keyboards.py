@@ -127,6 +127,7 @@ def build_rss_ai_menu(labels: dict, rss_paused: bool = False) -> InlineKeyboardM
     pause_resume_callback = "ui:rss:resume_posting" if rss_paused else "ui:rss:pause_posting"
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton(labels["btn_rss_quickstart"], callback_data="ui:rss:quickstart")],
             [
                 InlineKeyboardButton(labels["btn_edit_prompt"], callback_data="ui:rss:stylemenu"),
                 InlineKeyboardButton(labels["btn_edit_feeds"], callback_data="ui:rss:feeds"),
