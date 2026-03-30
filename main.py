@@ -3108,6 +3108,32 @@ def clear_prompt_interaction_state(
     context.user_data.pop("copy_style_review", None)
 
 
+def _flow_keyword(text: str) -> str:
+    return (text or "").strip().lower()
+
+
+def _is_help_request(text: str) -> bool:
+    return _flow_keyword(text) in {"help", "?", "example", "examples", "помощь", "пример", "примеры"}
+
+
+def _is_skip_request(text: str) -> bool:
+    return _flow_keyword(text) in {"skip", "-", "пропустить", "пропуск", "skip this"}
+
+
+def pending_flow_label(cfg: dict, context: ContextTypes.DEFAULT_TYPE) -> str | None:
+    builder = context.user_data.get("prompt_builder")
+    if isinstance(builder, dict):
+        step = int(builder.get("step", 0)) + 1
+        return ui_text(cfg, "flow_resume_prompt_builder").format(step=step, total=7)
+    if context.user_data.get("awaiting_content_plan_edit"):
+        return ui_text(cfg, "flow_resume_content_plan_edit")
+    if context.user_data.get("awaiting_creative_source_add"):
+        return ui_text(cfg, "flow_resume_source_add")
+    if context.user_data.get("awaiting_channel_forward"):
+        return ui_text(cfg, "flow_resume_channel_setup")
+    return None
+
+
 # ===================== Creator mode (text-only) =====================
 def creative_variation_level(cfg: dict) -> str:
     level = (cfg.get("creative_variation_level") or "balanced").strip().lower()
@@ -4228,7 +4254,11 @@ async def reply_ui(update: Update, text: str, cfg: dict, show_menu: bool = True)
         await update.message.reply_text(text=text, reply_markup=markup)
 
 
-async def send_menu(update: Update, cfg: dict, text: str) -> None:
+async def send_menu(update: Update, cfg: dict, text: str, context: ContextTypes.DEFAULT_TYPE | None = None) -> None:
+    if context is not None:
+        pending = pending_flow_label(cfg, context)
+        if pending:
+            text = text + "\n\n" + ui_text(cfg, "flow_resume_hint").format(flow=pending)
     await reply_ui(update, text, cfg, show_menu=True)
 
 
@@ -4541,7 +4571,7 @@ async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     cfg["language"] = choice
     save_client(user_id, cfg)
-    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg))
+    await send_menu(update, cfg, tr(cfg, "menu_title") + "\n\n" + pay_line(update, cfg), context)
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -4559,7 +4589,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     welcome_text = UI_TEXTS[lang].get(welcome_key, UI_TEXTS[lang]["start_welcome"])
     if first_name and "{name}" in welcome_text:
         welcome_text = welcome_text.format(name=first_name)
-    await send_menu(update, cfg, welcome_text)
+    await send_menu(update, cfg, welcome_text, context)
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -4597,7 +4627,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def materials_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     cfg = load_client(user_id)
-    await send_menu(update, cfg, tr(cfg, "ui_materials"))
+    await send_menu(update, cfg, tr(cfg, "ui_materials"), context)
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -4608,7 +4638,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
         return
 
-    await send_menu(update, cfg, build_help_text(cfg))
+    await send_menu(update, cfg, build_help_text(cfg), context)
 
 from telegram.error import BadRequest
 from telegram import Update
@@ -5304,7 +5334,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 preview_prefix = selected_channel_text(cfg, selected) + "\n\n" + "🧪 Preview:\n\n"
                 creator_entities = apply_bold_title(msg, []) if bool(cfg.get("creative_bold_title", False)) else []
                 await q.message.reply_text(
-                    preview_prefix + msg,
+                    preview_prefix + msg + "\n\n" + ui_text(cfg, "preview_ready_note"),
                     entities=_load_message_entities([_message_entity_to_dict(e) for e in creator_entities], offset_shift=len(preview_prefix)) or None,
                     reply_markup=build_creative_submenu(cfg),
                 )
@@ -5858,7 +5888,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         cfg["include_rss_source_link"] = not bool(cfg.get("include_rss_source_link", True))
         save_client(user_id, cfg)
         await q.answer()
-        text = output_settings_text(cfg, "rss")
+        text = ui_text(cfg, "output_settings_saved") + "\n\n" + output_settings_text(cfg, "rss")
         try:
             await q.edit_message_text(text=text, reply_markup=build_rss_output_submenu(cfg))
         except BadRequest:
@@ -5869,7 +5899,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         cfg["use_rss_feed_image"] = not bool(cfg.get("use_rss_feed_image", True))
         save_client(user_id, cfg)
         await q.answer()
-        text = output_settings_text(cfg, "rss")
+        text = ui_text(cfg, "output_settings_saved") + "\n\n" + output_settings_text(cfg, "rss")
         try:
             await q.edit_message_text(text=text, reply_markup=build_rss_output_submenu(cfg))
         except BadRequest:
@@ -5888,7 +5918,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.user_data.pop("awaiting_rss_cta_text", None)
         save_client(user_id, cfg)
         await q.answer()
-        text = output_settings_text(cfg, "rss")
+        text = ui_text(cfg, "output_settings_saved") + "\n\n" + output_settings_text(cfg, "rss")
         try:
             await q.edit_message_text(text=text, reply_markup=build_rss_output_submenu(cfg))
         except BadRequest:
@@ -5901,7 +5931,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         cfg[key] = not bool(cfg.get(key, False))
         save_client(user_id, cfg)
         await q.answer()
-        text = output_settings_text(cfg, mode)
+        text = ui_text(cfg, "output_settings_saved") + "\n\n" + output_settings_text(cfg, mode)
         submenu = build_creative_output_submenu(cfg) if mode == "creative" else build_rss_output_submenu(cfg)
         try:
             await q.edit_message_text(text=text, reply_markup=submenu)
@@ -6111,28 +6141,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "ui:creative:add_template_image",
         "ui:creative:add_watermark",
     ):
-        mode = "creative" if data.startswith("ui:creative") else "rss"
-        asset_type = "watermark" if data.endswith("watermark") else "template"
-        action = "creative_output" if mode == "creative" else "rss_output"
-        selected, state = require_channel_context(cfg, context, action)
-        if state == "empty":
-            await q.answer()
-            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
-            return
-        if state == "pick":
-            await q.answer()
-            await q.message.reply_text(
-                ui_text(cfg, "channel_picker_title"),
-                reply_markup=build_channel_picker(cfg, action, f"ui:mode:{mode}:menu"),
-            )
-            return
-        context.user_data["awaiting_asset_upload"] = {"mode": mode, "asset": asset_type, "channel": selected}
         await q.answer()
-        await q.message.reply_text(
-            selected_channel_text(cfg, selected)
-            + "\n\n"
-            + (ui_text(cfg, "asset_prompt_send_watermark") if asset_type == "watermark" else ui_text(cfg, "asset_prompt_send_template"))
-        )
+        await q.message.reply_text(ui_text(cfg, "help_contact"))
         return
 
     if data in (
@@ -6141,35 +6151,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "ui:creative:delete_template_image",
         "ui:creative:delete_watermark",
     ):
-        mode = "creative" if data.startswith("ui:creative") else "rss"
-        asset_type = "watermark" if data.endswith("watermark") else "template"
-        action = "creative_output" if mode == "creative" else "rss_output"
-        selected, state = require_channel_context(cfg, context, action)
-        if state == "empty":
-            await q.answer()
-            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
-            return
-        if state == "pick":
-            await q.answer()
-            await q.message.reply_text(
-                ui_text(cfg, "channel_picker_title"),
-                reply_markup=build_channel_picker(cfg, action, f"ui:mode:{mode}:menu"),
-            )
-            return
-        path_key = f"{mode}_{asset_type}_image_path"
-        file_key = f"{mode}_{asset_type}_file_id"
-        clear_asset_file(str(cfg.get(path_key) or ""))
-        cfg[path_key] = ""
-        cfg[file_key] = ""
-        save_client(user_id, cfg)
         await q.answer()
-        notice = ui_text(cfg, "asset_deleted_watermark") if asset_type == "watermark" else ui_text(cfg, "asset_deleted_template")
-        text = selected_channel_text(cfg, selected) + "\n\n" + notice + "\n\n" + output_settings_text(cfg, mode)
-        submenu = build_creative_output_submenu(cfg) if mode == "creative" else build_rss_output_submenu(cfg)
-        try:
-            await q.edit_message_text(text=text, reply_markup=submenu)
-        except BadRequest:
-            await q.message.reply_text(text=text, reply_markup=submenu)
+        await q.message.reply_text(ui_text(cfg, "help_contact"))
         return
 
     if data == "ui:rss:feeds":
@@ -6695,15 +6678,15 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:backmain":
-        await send_menu(update, cfg, tr(cfg, "menu_title"))
+        await send_menu(update, cfg, tr(cfg, "menu_title"), context)
         return
 
     if data == "ui:help":
-        await send_menu(update, cfg, build_help_text(cfg))
+        await send_menu(update, cfg, build_help_text(cfg), context)
         return
 
     if data == "ui:pay":
-        await send_menu(update, cfg, tr(cfg, "ui_pay").format(pay=pay_line(update, cfg)))
+        await send_menu(update, cfg, tr(cfg, "ui_pay").format(pay=pay_line(update, cfg)), context)
         return
 
     if data == "ui:status":
@@ -7039,6 +7022,16 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 reply_markup=build_creative_content_plan_submenu(cfg),
             )
             return
+        if _is_help_request(text):
+            context.user_data["awaiting_content_plan_edit"] = awaiting_content_plan_edit
+            await update.message.reply_text(ui_text(cfg, "flow_help_content_plan_edit"))
+            return
+        if _is_skip_request(text):
+            await update.message.reply_text(
+                ui_text(cfg, "flow_skip_saved"),
+                reply_markup=build_creative_content_plan_submenu(cfg),
+            )
+            return
         selected_channel = (awaiting_content_plan_edit.get("channel") or "").strip()
         if selected_channel:
             switch_active_channel(cfg, selected_channel)
@@ -7064,6 +7057,13 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         if text.lower() == "cancel":
             context.user_data.pop("awaiting_creative_source_add", None)
             await update.message.reply_text(ui_text(cfg, "source_add_cancelled"))
+            return
+        if _is_help_request(text):
+            await update.message.reply_text(ui_text(cfg, "flow_help_source_add"))
+            return
+        if _is_skip_request(text):
+            context.user_data.pop("awaiting_creative_source_add", None)
+            await update.message.reply_text(ui_text(cfg, "flow_skip_saved"))
             return
         context.user_data.pop("awaiting_creative_source_add", None)
         selected_channel = (awaiting_source_add.get("channel") or "").strip()
@@ -7123,10 +7123,15 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 reply_markup=build_creative_submenu(cfg) if mode == "creative" else build_rss_submenu(cfg),
             )
             return
+        if _is_help_request(text):
+            step = int(prompt_builder.get("step", 0))
+            questions = prompt_builder_questions(cfg, mode)
+            await update.message.reply_text(ui_text(cfg, "flow_help_prompt_builder") + "\n\n" + questions[step])
+            return
 
         step = int(prompt_builder.get("step", 0))
         answers = prompt_builder.get("answers") or {}
-        answers[f"q{step + 1}"] = text
+        answers[f"q{step + 1}"] = "not specified" if _is_skip_request(text) else text
         prompt_builder["answers"] = answers
         questions = prompt_builder_questions(cfg, mode)
 
