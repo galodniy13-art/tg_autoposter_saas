@@ -81,6 +81,7 @@ def build_creative_menu(labels: dict) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(labels["btn_idea_bank"], callback_data="ui:creative:ideas")],
             [InlineKeyboardButton(labels["btn_campaigns"], callback_data="ui:creative:campaigns")],
             [InlineKeyboardButton(labels["btn_creative_publish_settings"], callback_data="ui:creative:publish_settings")],
+            [InlineKeyboardButton(labels["btn_creative_advanced"], callback_data="ui:creative:advanced")],
             [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:creative:preview")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:modes")],
         ]
@@ -97,23 +98,43 @@ def build_creative_publish_settings_menu(labels: dict) -> InlineKeyboardMarkup:
     )
 
 
-def build_creative_intake_menu(labels: dict) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
+def build_creative_intake_menu(labels: dict, show_resume: bool = False) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(labels["btn_channel_intake_fast_start"], callback_data="ui:creative:intake:fast_start")],
+        [InlineKeyboardButton(labels["btn_channel_intake_start"], callback_data="ui:creative:intake:start")],
+    ]
+    if show_resume:
+        rows.append([InlineKeyboardButton(labels["btn_resume_flow"], callback_data="ui:creative:intake:resume")])
+    rows.extend(
         [
-            [InlineKeyboardButton(labels["btn_channel_intake_fast_start"], callback_data="ui:creative:intake:fast_start")],
-            [InlineKeyboardButton(labels["btn_channel_intake_start"], callback_data="ui:creative:intake:start")],
             [InlineKeyboardButton(labels["btn_channel_intake_view"], callback_data="ui:creative:intake:view")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
         ]
     )
+    return InlineKeyboardMarkup(rows)
 
 
-def build_creative_campaigns_menu(labels: dict) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
+def build_creative_campaigns_menu(labels: dict, show_resume: bool = False) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(labels["btn_campaign_create"], callback_data="ui:creative:campaigns:create")]]
+    if show_resume:
+        rows.append([InlineKeyboardButton(labels["btn_resume_flow"], callback_data="ui:creative:campaigns:create:resume")])
+    rows.extend(
         [
-            [InlineKeyboardButton(labels["btn_campaign_create"], callback_data="ui:creative:campaigns:create")],
             [InlineKeyboardButton(labels["btn_campaign_view"], callback_data="ui:creative:campaigns:view")],
             [InlineKeyboardButton(labels["btn_campaign_activate"], callback_data="ui:creative:campaigns:activate")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
+        ]
+    )
+    return InlineKeyboardMarkup(rows)
+
+
+def build_creative_advanced_menu(labels: dict) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(labels["btn_content_variety"], callback_data="ui:creative:variety")],
+            [InlineKeyboardButton(labels["btn_source_center"], callback_data="ui:creative:sources")],
+            [InlineKeyboardButton(labels["btn_content_plan"], callback_data="ui:creative:contentplan")],
+            [InlineKeyboardButton(labels["btn_visual_support"], callback_data="ui:creative:visual")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
         ]
     )
@@ -127,7 +148,7 @@ def build_creative_variety_menu(labels: dict, variation_level: str, avoid_repeti
             [InlineKeyboardButton(labels["btn_variation_level"] + f": {level_label}", callback_data="ui:creative:variety:level")],
             [InlineKeyboardButton(labels["btn_post_types"], callback_data="ui:creative:variety:types")],
             [InlineKeyboardButton(avoid_label, callback_data="ui:creative:variety:avoid")],
-            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:creative:advanced")],
         ]
     )
 
@@ -253,7 +274,7 @@ def build_creative_content_plan_menu(labels: dict) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(labels["btn_content_plan_view"], callback_data="ui:creative:contentplan:view")],
             [InlineKeyboardButton(labels["btn_content_plan_regenerate_item"], callback_data="ui:creative:contentplan:regenerate")],
             [InlineKeyboardButton(labels["btn_content_plan_edit_item"], callback_data="ui:creative:contentplan:edit")],
-            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:creative:advanced")],
         ]
     )
 
@@ -274,7 +295,7 @@ def build_creative_source_center_menu(labels: dict) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(labels["btn_idea_bank"], callback_data="ui:creative:sources:idea_bank")],
             [InlineKeyboardButton(labels["btn_inspiration_links"], callback_data="ui:creative:sources:inspiration_links")],
             [InlineKeyboardButton(labels["btn_source_snippets"], callback_data="ui:creative:sources:source_snippets")],
-            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:creative:advanced")],
         ]
     )
 
@@ -307,7 +328,7 @@ def build_creative_visual_support_menu(labels: dict) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(labels["btn_visual_generate_idea"], callback_data="ui:creative:visual:idea")],
             [InlineKeyboardButton(labels["btn_visual_generate_search_query"], callback_data="ui:creative:visual:search")],
             [InlineKeyboardButton(labels["btn_visual_generate_ai_prompt"], callback_data="ui:creative:visual:aiprompt")],
-            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:creative:advanced")],
         ]
     )
 
