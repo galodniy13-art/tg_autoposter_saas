@@ -3746,6 +3746,40 @@ def creative_campaign_questions(cfg: dict) -> list[tuple[str, str]]:
     ]
 
 
+def creative_fast_start_questions(cfg: dict) -> list[tuple[str, str]]:
+    return [
+        ("channel_about", ui_text(cfg, "quickstart_q_channel_about")),
+        ("audience", ui_text(cfg, "quickstart_q_audience")),
+        ("offers", ui_text(cfg, "quickstart_q_offer")),
+        ("creator_goals", ui_text(cfg, "quickstart_q_goal")),
+    ]
+
+
+def creative_campaign_arc_readable_text(cfg: dict, campaign: dict) -> str:
+    arc = campaign.get("arc") if isinstance(campaign.get("arc"), list) else []
+    if not arc:
+        return ui_text(cfg, "campaign_arc_empty")
+    lines = [ui_text(cfg, "campaign_arc_title")]
+    for idx, item in enumerate(arc, start=1):
+        if not isinstance(item, dict):
+            continue
+        day_label = item.get("day") or idx
+        stage = str(item.get("stage") or ui_text(cfg, "campaign_arc_default_stage")).strip()
+        direction = str(item.get("direction") or ui_text(cfg, "campaign_arc_default_direction")).strip()
+        hook = str(item.get("hook") or ui_text(cfg, "campaign_arc_default_hook")).strip()
+        cta = str(item.get("cta") or "").strip()
+        lines.append(
+            ui_text(cfg, "campaign_arc_day_block").format(
+                day=day_label,
+                stage=stage[:140],
+                direction=direction[:220],
+                hook=hook[:180],
+                cta=(cta[:160] if cta else ui_text(cfg, "campaign_arc_cta_optional")),
+            )
+        )
+    return "\n\n".join(lines)
+
+
 def creative_intake_summary_text(cfg: dict, selected_channel: str) -> str:
     data = cfg.get("creative_channel_intake") if isinstance(cfg.get("creative_channel_intake"), dict) else {}
     lines = [ui_text(cfg, "channel_intake_title"), "", selected_channel_text(cfg, selected_channel), ""]
@@ -5527,6 +5561,22 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
+    if data == "ui:creative:intake:fast_start":
+        selected, state = require_channel_context(cfg, context, "creative_intake")
+        if state in {"empty", "pick"}:
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        questions = creative_fast_start_questions(cfg)
+        context.user_data["awaiting_creative_fast_start"] = {"channel": selected, "step": 0, "answers": {}}
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "quickstart_start")
+            + "\n\n"
+            + f"1/{len(questions)}. {questions[0][1]}"
+        )
+        return
+
     if data == "ui:creative:ideas":
         if not await enforce_mode_paywall(update, cfg, "creator"):
             return
@@ -5572,8 +5622,13 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if data == "ui:creative:campaigns:create":
         selected = str(cfg.get("channel") or "").strip()
         context.user_data["awaiting_campaign_create"] = {"channel": selected, "step": 0, "answers": {}}
+        questions = creative_campaign_questions(cfg)
         await q.answer()
-        await q.message.reply_text(ui_text(cfg, "campaign_create_start"))
+        await q.message.reply_text(
+            ui_text(cfg, "campaign_create_start")
+            + "\n\n"
+            + f"1/{len(questions)}. {questions[0][1]}"
+        )
         return
 
     if data == "ui:creative:campaigns:view":
@@ -7952,12 +8007,71 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         cfg["creative_campaigns"] = campaigns[-30:]
         cfg["creative_active_campaign_id"] = campaign["id"]
         save_client(user_id, cfg)
-        arc_preview = campaign.get("arc") or []
-        lines = [ui_text(cfg, "campaign_create_saved")]
-        for item in arc_preview[: min(7, len(arc_preview))]:
-            if isinstance(item, dict):
-                lines.append(f"Day {item.get('day') or '?'} · {item.get('stage') or '-'} · {item.get('direction') or '-'}")
+        lines = [
+            ui_text(cfg, "campaign_create_saved"),
+            "",
+            ui_text(cfg, "campaign_created_for_goal").format(goal=(campaign.get("goal") or ui_text(cfg, "campaign_fallback_goal"))[:140]),
+            creative_campaign_arc_readable_text(cfg, campaign),
+            "",
+            ui_text(cfg, "first_success_next_step_campaign"),
+        ]
         await update.message.reply_text("\n".join(lines), reply_markup=build_creative_campaigns_submenu(cfg))
+        return
+
+    awaiting_fast_start = context.user_data.get("awaiting_creative_fast_start")
+    if awaiting_fast_start:
+        questions = creative_fast_start_questions(cfg)
+        step = int(awaiting_fast_start.get("step", 0))
+        answers = awaiting_fast_start.get("answers") or {}
+        if text.lower() == "cancel":
+            context.user_data.pop("awaiting_creative_fast_start", None)
+            await update.message.reply_text(ui_text(cfg, "quickstart_cancelled"), reply_markup=build_creative_intake_submenu(cfg))
+            return
+        key = questions[step][0]
+        answers[key] = text[:700]
+        step += 1
+        if step < len(questions):
+            context.user_data["awaiting_creative_fast_start"] = {
+                "channel": awaiting_fast_start.get("channel"),
+                "step": step,
+                "answers": answers,
+            }
+            await update.message.reply_text(f"{step + 1}/{len(questions)}. {questions[step][1]}")
+            return
+        context.user_data.pop("awaiting_creative_fast_start", None)
+        selected_channel = (awaiting_fast_start.get("channel") or "").strip()
+        if selected_channel:
+            switch_active_channel(cfg, selected_channel)
+        quick_intake = cfg.get("creative_channel_intake") if isinstance(cfg.get("creative_channel_intake"), dict) else {}
+        quick_intake.update(
+            {
+                "channel_about": answers.get("channel_about", ""),
+                "audience": answers.get("audience", ""),
+                "offers": answers.get("offers", ""),
+                "creator_goals": answers.get("creator_goals", ""),
+            }
+        )
+        cfg["creative_channel_intake"] = quick_intake
+        cfg["creator_profile"] = (
+            f"Channel: {answers.get('channel_about','')}\n"
+            f"Audience: {answers.get('audience','')}\n"
+            f"Offers: {answers.get('offers','')}\n"
+            f"Goal: {answers.get('creator_goals','')}"
+        )[:1800]
+        save_client(user_id, cfg)
+        preview = ""
+        try:
+            preview = creator_make_post(user_id, cfg)
+        except Exception:
+            logger.exception("Creative quickstart preview failed for user %s", user_id)
+        lines = [ui_text(cfg, "quickstart_saved")]
+        lines.append(ui_text(cfg, "quickstart_why_post"))
+        if preview:
+            lines.extend(["", ui_text(cfg, "quickstart_preview_title"), preview[:900]])
+        else:
+            lines.extend(["", ui_text(cfg, "quickstart_preview_failed")])
+        lines.extend(["", ui_text(cfg, "first_success_next_step_quickstart")])
+        await update.message.reply_text("\n".join(lines), reply_markup=build_creative_intake_submenu(cfg))
         return
 
     awaiting_intake = context.user_data.get("awaiting_creative_intake")
