@@ -32,6 +32,9 @@ from keyboards import (
     build_payment_menu,
     build_channel_management_menu,
     build_creative_menu,
+    build_creative_publish_settings_menu,
+    build_creative_intake_menu,
+    build_creative_campaigns_menu,
     build_creative_variety_menu,
     build_creative_variation_level_menu,
     build_creative_post_types_menu,
@@ -468,6 +471,9 @@ DEFAULT_CLIENT = {
     "creative_content_plan": [],
     "creative_topic_pillars": [],
     "creative_idea_bank": [],
+    "creative_channel_intake": {},
+    "creative_campaigns": [],
+    "creative_active_campaign_id": None,
     "creative_inspiration_links": [],
     "creative_source_snippets": [],
     "last_visual_idea": "",
@@ -553,6 +559,9 @@ CHANNEL_SCOPED_KEYS = (
     "creative_content_plan",
     "creative_topic_pillars",
     "creative_idea_bank",
+    "creative_channel_intake",
+    "creative_campaigns",
+    "creative_active_campaign_id",
     "creative_inspiration_links",
     "creative_source_snippets",
     "last_visual_idea",
@@ -3382,6 +3391,55 @@ def llm_generate_content_plan(
     return normalized[:days] if not regenerate_item else normalized[:1]
 
 
+def llm_generate_campaign_arc(cfg: dict, campaign: dict) -> list[dict]:
+    intake = cfg.get("creative_channel_intake") if isinstance(cfg.get("creative_channel_intake"), dict) else {}
+    days = int(campaign.get("duration_days") or 7)
+    base_prompt = (
+        "Create a practical creator campaign arc.\n"
+        f"Days: {days}.\n"
+        f"Goal: {campaign.get('goal') or 'N/A'}.\n"
+        f"Offer/product: {campaign.get('offer') or 'N/A'}.\n"
+        f"Target action: {campaign.get('target_action') or 'N/A'}.\n"
+        f"Audience awareness/situation: {campaign.get('awareness') or 'N/A'}.\n"
+        f"Key objections: {campaign.get('objections') or 'N/A'}.\n"
+        f"Key benefits: {campaign.get('benefits') or 'N/A'}.\n"
+        f"Urgency/event context: {campaign.get('urgency_context') or 'N/A'}.\n"
+        "Return ONLY JSON array with one item per day.\n"
+        "Each item keys: day, stage, direction, hook, proof, cta.\n"
+        "Stages should naturally move: warm -> educate -> desire -> objections -> proof -> conversion.\n"
+    )
+    if intake:
+        base_prompt += (
+            "Channel context:\n"
+            f"- Topic: {intake.get('channel_about') or 'N/A'}\n"
+            f"- Audience: {intake.get('audience') or 'N/A'}\n"
+            f"- Tone: {intake.get('tone_style') or 'N/A'}\n"
+        )
+
+    if LLM_PROVIDER == "openai_compat":
+        url = OPENAI_BASE_URL.rstrip("/") + "/chat/completions"
+        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+        payload = {
+            "model": OPENAI_MODEL,
+            "messages": [{"role": "system", "content": "You build strategic creator campaigns."}, {"role": "user", "content": base_prompt}],
+            "temperature": 0.75,
+        }
+        r = requests.post(url, headers=headers, json=payload, timeout=60)
+        r.raise_for_status()
+        txt = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "")
+    else:
+        payload = {"model": OLLAMA_MODEL, "prompt": "You build strategic creator campaigns.\n\n" + base_prompt, "stream": False}
+        r = requests.post(OLLAMA_URL, json=payload, timeout=60)
+        r.raise_for_status()
+        txt = r.json().get("response", "")
+    cleaned = txt.strip().strip("`")
+    cleaned = cleaned.replace("json", "", 1).strip() if cleaned.lower().startswith("json") else cleaned
+    parsed = json.loads(cleaned)
+    if not isinstance(parsed, list):
+        raise ValueError("campaign arc response is not a list")
+    return [item for item in parsed if isinstance(item, dict)][:days]
+
+
 def creator_make_post(user_id: int, cfg: dict) -> str:
     style_prompt = get_mode_prompt(user_id, cfg, "creative")
     profile = (cfg.get("creator_profile") or "").strip()
@@ -3407,6 +3465,45 @@ def creator_make_post(user_id: int, cfg: dict) -> str:
         f"{variation_guidance[variation]}\n"
         f"{emoji_style_note(cfg, 'creative')}"
     )
+    intake = cfg.get("creative_channel_intake") if isinstance(cfg.get("creative_channel_intake"), dict) else {}
+    if intake:
+        prompt += (
+            "\nUse this channel context as primary strategy:\n"
+            f"- Channel about: {str(intake.get('channel_about') or 'N/A')}\n"
+            f"- Audience: {str(intake.get('audience') or 'N/A')}\n"
+            f"- Audience wants: {str(intake.get('audience_wants') or 'N/A')}\n"
+            f"- Pains: {str(intake.get('audience_pains') or 'N/A')}\n"
+            f"- Tone/style: {str(intake.get('tone_style') or 'N/A')}\n"
+            f"- Offer/services: {str(intake.get('offers') or 'N/A')}\n"
+            f"- Creator goals: {str(intake.get('creator_goals') or 'N/A')}\n"
+            f"- Good examples: {str(intake.get('good_posts') or 'N/A')}\n"
+            f"- Avoid examples: {str(intake.get('bad_posts') or 'N/A')}\n"
+            f"- Never sound like: {str(intake.get('never_sound_like') or 'N/A')}\n"
+        )
+    active_campaign_id = cfg.get("creative_active_campaign_id")
+    for campaign in creative_campaigns(cfg):
+        if campaign.get("id") == active_campaign_id:
+            prompt += (
+                "\nActive campaign context (prioritize this):\n"
+                f"- Goal: {campaign.get('goal') or 'N/A'}\n"
+                f"- Offer: {campaign.get('offer') or 'N/A'}\n"
+                f"- Target action: {campaign.get('target_action') or 'N/A'}\n"
+                f"- Awareness level/situation: {campaign.get('awareness') or 'N/A'}\n"
+                f"- Key objections: {campaign.get('objections') or 'N/A'}\n"
+                f"- Key benefits: {campaign.get('benefits') or 'N/A'}\n"
+                f"- Urgency/event context: {campaign.get('urgency_context') or 'N/A'}\n"
+            )
+            arc = campaign.get("arc") or []
+            if arc:
+                first = arc[0]
+                if isinstance(first, dict):
+                    prompt += (
+                        "Use the current campaign arc direction as guidance:\n"
+                        f"- Stage: {first.get('stage') or 'N/A'}\n"
+                        f"- Direction: {first.get('direction') or 'N/A'}\n"
+                        f"- CTA focus: {first.get('cta') or 'N/A'}\n"
+                    )
+            break
     sources_block = creative_source_context_block(cfg, for_plan=False)
     if sources_block:
         prompt += "\n" + sources_block
@@ -3480,6 +3577,18 @@ def build_modes_submenu(cfg: dict) -> InlineKeyboardMarkup:
 
 def build_creative_submenu(cfg: dict) -> InlineKeyboardMarkup:
     return build_creative_menu(ui_pack(cfg))
+
+
+def build_creative_publish_settings_submenu(cfg: dict) -> InlineKeyboardMarkup:
+    return build_creative_publish_settings_menu(ui_pack(cfg))
+
+
+def build_creative_intake_submenu(cfg: dict) -> InlineKeyboardMarkup:
+    return build_creative_intake_menu(ui_pack(cfg))
+
+
+def build_creative_campaigns_submenu(cfg: dict) -> InlineKeyboardMarkup:
+    return build_creative_campaigns_menu(ui_pack(cfg))
 
 
 def build_creative_variety_submenu(cfg: dict) -> InlineKeyboardMarkup:
@@ -3575,6 +3684,93 @@ def creative_content_plan_menu_text(cfg: dict, selected_channel: str) -> str:
         + "\n\n"
         + ui_text(cfg, "content_plan_intro")
     )
+
+
+def creative_channel_intake_questions(cfg: dict) -> list[tuple[str, str]]:
+    return [
+        ("channel_about", ui_text(cfg, "channel_intake_q_channel_about")),
+        ("audience", ui_text(cfg, "channel_intake_q_audience")),
+        ("audience_wants", ui_text(cfg, "channel_intake_q_audience_wants")),
+        ("audience_pains", ui_text(cfg, "channel_intake_q_audience_pains")),
+        ("tone_style", ui_text(cfg, "channel_intake_q_tone_style")),
+        ("offers", ui_text(cfg, "channel_intake_q_offers")),
+        ("creator_goals", ui_text(cfg, "channel_intake_q_creator_goals")),
+        ("good_posts", ui_text(cfg, "channel_intake_q_good_posts")),
+        ("bad_posts", ui_text(cfg, "channel_intake_q_bad_posts")),
+        ("never_sound_like", ui_text(cfg, "channel_intake_q_never_sound_like")),
+    ]
+
+
+def creative_campaign_questions(cfg: dict) -> list[tuple[str, str]]:
+    return [
+        ("goal", ui_text(cfg, "campaign_q_goal")),
+        ("offer", ui_text(cfg, "campaign_q_offer")),
+        ("duration_days", ui_text(cfg, "campaign_q_duration")),
+        ("target_action", ui_text(cfg, "campaign_q_target_action")),
+        ("awareness", ui_text(cfg, "campaign_q_awareness")),
+        ("objections", ui_text(cfg, "campaign_q_objections")),
+        ("benefits", ui_text(cfg, "campaign_q_benefits")),
+        ("urgency_context", ui_text(cfg, "campaign_q_urgency")),
+    ]
+
+
+def creative_intake_summary_text(cfg: dict, selected_channel: str) -> str:
+    data = cfg.get("creative_channel_intake") if isinstance(cfg.get("creative_channel_intake"), dict) else {}
+    lines = [ui_text(cfg, "channel_intake_title"), "", selected_channel_text(cfg, selected_channel), ""]
+    if not data:
+        lines.append(ui_text(cfg, "channel_intake_empty"))
+        return "\n".join(lines)
+    label_keys = {
+        "channel_about": "channel_intake_label_channel_about",
+        "audience": "channel_intake_label_audience",
+        "audience_wants": "channel_intake_label_audience_wants",
+        "audience_pains": "channel_intake_label_audience_pains",
+        "tone_style": "channel_intake_label_tone_style",
+        "offers": "channel_intake_label_offers",
+        "creator_goals": "channel_intake_label_creator_goals",
+        "good_posts": "channel_intake_label_good_posts",
+        "bad_posts": "channel_intake_label_bad_posts",
+        "never_sound_like": "channel_intake_label_never_sound_like",
+    }
+    for key, label_key in label_keys.items():
+        val = str(data.get(key) or "").strip()
+        if val:
+            lines.append(f"• {ui_text(cfg, label_key)}: {val[:280]}")
+    active_campaign_id = cfg.get("creative_active_campaign_id")
+    campaigns = cfg.get("creative_campaigns") if isinstance(cfg.get("creative_campaigns"), list) else []
+    active = None
+    for item in campaigns:
+        if isinstance(item, dict) and item.get("id") == active_campaign_id:
+            active = item
+            break
+    if active:
+        lines.extend(["", ui_text(cfg, "campaign_active_label").format(name=str(active.get("goal") or "Campaign"))])
+    return "\n".join(lines)
+
+
+def creative_campaigns(cfg: dict) -> list[dict]:
+    raw = cfg.get("creative_campaigns")
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for idx, item in enumerate(raw, start=1):
+        if not isinstance(item, dict):
+            continue
+        out.append(
+            {
+                "id": int(item.get("id") or idx),
+                "goal": str(item.get("goal") or "").strip(),
+                "offer": str(item.get("offer") or "").strip(),
+                "duration_days": int(item.get("duration_days") or 0) or 7,
+                "target_action": str(item.get("target_action") or "").strip(),
+                "awareness": str(item.get("awareness") or "").strip(),
+                "objections": str(item.get("objections") or "").strip(),
+                "benefits": str(item.get("benefits") or "").strip(),
+                "urgency_context": str(item.get("urgency_context") or "").strip(),
+                "arc": item.get("arc") if isinstance(item.get("arc"), list) else [],
+            }
+        )
+    return out
 
 
 def creative_content_plan_view_text(cfg: dict, selected_channel: str) -> str:
@@ -4963,6 +5159,10 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "ui:backmain",
         "ui:mode:rss:menu",
         "ui:mode:creative:menu",
+        "ui:creative:intake",
+        "ui:creative:ideas",
+        "ui:creative:campaigns",
+        "ui:creative:publish_settings",
         "ui:creative:contentplan",
         "ui:creative:sources",
         "ui:creative:variety",
@@ -5042,6 +5242,14 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             route_data = mapped
         elif action == "creative_variety":
             route_data = "ui:creative:variety"
+        elif action == "creative_intake":
+            route_data = "ui:creative:intake"
+        elif action == "creative_ideas":
+            route_data = "ui:creative:ideas"
+        elif action == "creative_campaigns":
+            route_data = "ui:creative:campaigns"
+        elif action == "creative_publish_settings":
+            route_data = "ui:creative:publish_settings"
         elif action == "creative_visual":
             route_data = "ui:creative:visual"
         elif action == "creative_content_plan":
@@ -5181,6 +5389,155 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.message.reply_text(text=text, reply_markup=build_creative_submenu(cfg))
         return
 
+    if data == "ui:creative:publish_settings":
+        if not await enforce_mode_paywall(update, cfg, "creator"):
+            return
+        selected, state = require_channel_context(cfg, context, "creative_publish_settings")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_publish_settings", "ui:mode:creative:menu"),
+            )
+            return
+        await q.answer()
+        text = ui_text(cfg, "creative_publish_settings_title") + "\n\n" + selected_channel_text(cfg, selected)
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_creative_publish_settings_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_creative_publish_settings_submenu(cfg))
+        return
+
+    if data == "ui:creative:intake":
+        if not await enforce_mode_paywall(update, cfg, "creator"):
+            return
+        selected, state = require_channel_context(cfg, context, "creative_intake")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_intake", "ui:mode:creative:menu"),
+            )
+            return
+        await q.answer()
+        text = ui_text(cfg, "channel_intake_intro") + "\n\n" + selected_channel_text(cfg, selected)
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_creative_intake_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_creative_intake_submenu(cfg))
+        return
+
+    if data == "ui:creative:intake:view":
+        selected = str(cfg.get("channel") or "").strip()
+        await q.answer()
+        await q.message.reply_text(
+            creative_intake_summary_text(cfg, selected),
+            reply_markup=build_creative_intake_submenu(cfg),
+        )
+        return
+
+    if data == "ui:creative:intake:start":
+        selected, state = require_channel_context(cfg, context, "creative_intake")
+        if state in {"empty", "pick"}:
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        questions = creative_channel_intake_questions(cfg)
+        context.user_data["awaiting_creative_intake"] = {"channel": selected, "step": 0, "answers": {}}
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "channel_intake_start")
+            + "\n\n"
+            + f"1/{len(questions)}. {questions[0][1]}"
+        )
+        return
+
+    if data == "ui:creative:ideas":
+        if not await enforce_mode_paywall(update, cfg, "creator"):
+            return
+        selected, state = require_channel_context(cfg, context, "creative_sources_idea_bank")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_sources_idea_bank", "ui:mode:creative:menu"),
+            )
+            return
+        await q.answer()
+        text = creative_source_list_text(cfg, "idea_bank", selected)
+        await q.message.reply_text(text, reply_markup=build_creative_source_list_submenu(cfg, "idea_bank"))
+        return
+
+    if data == "ui:creative:campaigns":
+        if not await enforce_mode_paywall(update, cfg, "creator"):
+            return
+        selected, state = require_channel_context(cfg, context, "creative_campaigns")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_campaigns", "ui:mode:creative:menu"),
+            )
+            return
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "campaigns_intro") + "\n\n" + selected_channel_text(cfg, selected),
+            reply_markup=build_creative_campaigns_submenu(cfg),
+        )
+        return
+
+    if data == "ui:creative:campaigns:create":
+        selected = str(cfg.get("channel") or "").strip()
+        context.user_data["awaiting_campaign_create"] = {"channel": selected, "step": 0, "answers": {}}
+        await q.answer()
+        await q.message.reply_text(ui_text(cfg, "campaign_create_start"))
+        return
+
+    if data == "ui:creative:campaigns:view":
+        await q.answer()
+        campaigns = creative_campaigns(cfg)
+        if not campaigns:
+            await q.message.reply_text(ui_text(cfg, "campaign_empty"), reply_markup=build_creative_campaigns_submenu(cfg))
+            return
+        lines = [ui_text(cfg, "campaign_list_title")]
+        active_id = cfg.get("creative_active_campaign_id")
+        for item in campaigns:
+            marker = "✅ " if item.get("id") == active_id else ""
+            lines.append(
+                f"{marker}{item.get('id')}) {item.get('goal') or 'Campaign'} · {item.get('duration_days')}d · {item.get('target_action') or '-'}"
+            )
+        await q.message.reply_text("\n".join(lines), reply_markup=build_creative_campaigns_submenu(cfg))
+        return
+
+    if data == "ui:creative:campaigns:activate":
+        campaigns = creative_campaigns(cfg)
+        if not campaigns:
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "campaign_empty"), reply_markup=build_creative_campaigns_submenu(cfg))
+            return
+        context.user_data["awaiting_campaign_activate"] = True
+        lines = [ui_text(cfg, "campaign_activate_prompt")]
+        for item in campaigns:
+            lines.append(f"{item.get('id')}) {item.get('goal') or 'Campaign'}")
+        await q.answer()
+        await q.message.reply_text("\n".join(lines), reply_markup=build_creative_campaigns_submenu(cfg))
+        return
     if data == "ui:creative:contentplan":
         if not await enforce_mode_paywall(update, cfg, "creator"):
             return
@@ -5473,6 +5830,51 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     "source_type": source_type,
                 }
                 await q.message.reply_text(ui_text(cfg, meta["add_prompt_key"]))
+                return
+            if action == "generate" and source_type == "idea_bank":
+                await q.answer()
+                await q.message.reply_text(ui_text(cfg, "idea_bank_generating"))
+                intake = cfg.get("creative_channel_intake") if isinstance(cfg.get("creative_channel_intake"), dict) else {}
+                prompt = (
+                    "Generate 10 concise creator idea bank entries as plain lines.\n"
+                    "Mix formats: post idea, hook, angle, pain, desire, objection, story, proof, FAQ, launch idea.\n"
+                    f"Channel topic: {intake.get('channel_about') if intake else 'N/A'}\n"
+                    f"Audience: {intake.get('audience') if intake else 'N/A'}\n"
+                    f"Offer: {intake.get('offers') if intake else 'N/A'}\n"
+                    "No numbering, one idea per line."
+                )
+                try:
+                    if LLM_PROVIDER == "openai_compat":
+                        url = OPENAI_BASE_URL.rstrip("/") + "/chat/completions"
+                        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+                        payload = {
+                            "model": OPENAI_MODEL,
+                            "messages": [{"role": "system", "content": "You generate strategic creator ideas."}, {"role": "user", "content": prompt}],
+                            "temperature": 0.9,
+                        }
+                        r = requests.post(url, headers=headers, json=payload, timeout=60)
+                        r.raise_for_status()
+                        raw = (r.json().get("choices") or [{}])[0].get("message", {}).get("content", "")
+                    else:
+                        r = requests.post(OLLAMA_URL, json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False}, timeout=60)
+                        r.raise_for_status()
+                        raw = r.json().get("response", "")
+                    generated = [re.sub(r"^[\\-\\d\\.)\\s]+", "", line).strip() for line in (raw or "").splitlines()]
+                    generated = [line[:220] for line in generated if line]
+                    items = creative_source_items(cfg, meta["key"])
+                    items.extend(generated[:10])
+                    cfg[meta["key"]] = items[-150:]
+                    save_client(user_id, cfg)
+                    await q.message.reply_text(
+                        ui_text(cfg, "idea_bank_generated").format(count=min(len(generated), 10)),
+                        reply_markup=build_creative_source_list_submenu(cfg, source_type),
+                    )
+                except Exception:
+                    logger.exception("Idea bank generation failed for user %s", user_id)
+                    await q.message.reply_text(
+                        ui_text(cfg, "prompt_builder_error"),
+                        reply_markup=build_creative_source_list_submenu(cfg, source_type),
+                    )
                 return
             if action == "delete":
                 await q.answer()
@@ -7421,6 +7823,111 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     text = (update.message.text or update.message.caption or "").strip()
     if not text:
+        return
+
+    awaiting_campaign_activate = context.user_data.get("awaiting_campaign_activate")
+    if awaiting_campaign_activate:
+        context.user_data.pop("awaiting_campaign_activate", None)
+        try:
+            campaign_id = int(text.strip())
+        except ValueError:
+            await update.message.reply_text(ui_text(cfg, "campaign_activate_invalid"), reply_markup=build_creative_campaigns_submenu(cfg))
+            return
+        campaigns = creative_campaigns(cfg)
+        if not any(item.get("id") == campaign_id for item in campaigns):
+            await update.message.reply_text(ui_text(cfg, "campaign_activate_invalid"), reply_markup=build_creative_campaigns_submenu(cfg))
+            return
+        cfg["creative_active_campaign_id"] = campaign_id
+        save_client(user_id, cfg)
+        await update.message.reply_text(ui_text(cfg, "campaign_activate_saved"), reply_markup=build_creative_campaigns_submenu(cfg))
+        return
+
+    awaiting_campaign_create = context.user_data.get("awaiting_campaign_create")
+    if awaiting_campaign_create:
+        questions = creative_campaign_questions(cfg)
+        step = int(awaiting_campaign_create.get("step", 0))
+        answers = awaiting_campaign_create.get("answers") or {}
+        if text.lower() == "cancel":
+            context.user_data.pop("awaiting_campaign_create", None)
+            await update.message.reply_text(ui_text(cfg, "campaign_create_cancelled"), reply_markup=build_creative_campaigns_submenu(cfg))
+            return
+        key = questions[step][0]
+        answers[key] = text[:500]
+        step += 1
+        if step < len(questions):
+            context.user_data["awaiting_campaign_create"] = {
+                "channel": awaiting_campaign_create.get("channel"),
+                "step": step,
+                "answers": answers,
+            }
+            await update.message.reply_text(f"{step + 1}/{len(questions)}. {questions[step][1]}")
+            return
+        context.user_data.pop("awaiting_campaign_create", None)
+        campaigns = creative_campaigns(cfg)
+        campaign = {
+            "id": (max([int(item.get('id') or 0) for item in campaigns], default=0) + 1),
+            "goal": answers.get("goal", ""),
+            "offer": answers.get("offer", ""),
+            "duration_days": int(re.sub(r"\\D+", "", answers.get("duration_days", "")) or "7"),
+            "target_action": answers.get("target_action", ""),
+            "awareness": answers.get("awareness", ""),
+            "objections": answers.get("objections", ""),
+            "benefits": answers.get("benefits", ""),
+            "urgency_context": answers.get("urgency_context", ""),
+            "arc": [],
+        }
+        campaign["duration_days"] = min(max(campaign["duration_days"], 1), 30)
+        try:
+            campaign["arc"] = llm_generate_campaign_arc(cfg, campaign)
+        except Exception:
+            logger.exception("Campaign arc generation failed for user %s", user_id)
+        campaigns.append(campaign)
+        cfg["creative_campaigns"] = campaigns[-30:]
+        cfg["creative_active_campaign_id"] = campaign["id"]
+        save_client(user_id, cfg)
+        arc_preview = campaign.get("arc") or []
+        lines = [ui_text(cfg, "campaign_create_saved")]
+        for item in arc_preview[: min(7, len(arc_preview))]:
+            if isinstance(item, dict):
+                lines.append(f"Day {item.get('day') or '?'} · {item.get('stage') or '-'} · {item.get('direction') or '-'}")
+        await update.message.reply_text("\n".join(lines), reply_markup=build_creative_campaigns_submenu(cfg))
+        return
+
+    awaiting_intake = context.user_data.get("awaiting_creative_intake")
+    if awaiting_intake:
+        questions = creative_channel_intake_questions(cfg)
+        step = int(awaiting_intake.get("step", 0))
+        answers = awaiting_intake.get("answers") or {}
+        if text.lower() == "cancel":
+            context.user_data.pop("awaiting_creative_intake", None)
+            await update.message.reply_text(ui_text(cfg, "channel_intake_cancelled"), reply_markup=build_creative_intake_submenu(cfg))
+            return
+        key = questions[step][0]
+        answers[key] = text[:1200]
+        step += 1
+        if step < len(questions):
+            context.user_data["awaiting_creative_intake"] = {
+                "channel": awaiting_intake.get("channel"),
+                "step": step,
+                "answers": answers,
+            }
+            await update.message.reply_text(f"{step + 1}/{len(questions)}. {questions[step][1]}")
+            return
+        context.user_data.pop("awaiting_creative_intake", None)
+        selected_channel = (awaiting_intake.get("channel") or "").strip()
+        if selected_channel:
+            switch_active_channel(cfg, selected_channel)
+        cfg["creative_channel_intake"] = answers
+        cfg["creator_profile"] = (
+            f"Channel: {answers.get('channel_about','')}\nAudience: {answers.get('audience','')}\n"
+            f"Wants: {answers.get('audience_wants','')}\nPains: {answers.get('audience_pains','')}\n"
+            f"Tone: {answers.get('tone_style','')}\nOffers: {answers.get('offers','')}\nGoals: {answers.get('creator_goals','')}"
+        )[:1800]
+        save_client(user_id, cfg)
+        await update.message.reply_text(
+            ui_text(cfg, "channel_intake_saved") + "\n\n" + creative_intake_summary_text(cfg, selected_channel or (cfg.get("channel") or "")),
+            reply_markup=build_creative_intake_submenu(cfg),
+        )
         return
 
     awaiting_prompt_mode = context.user_data.get("awaiting_prompt_mode")
