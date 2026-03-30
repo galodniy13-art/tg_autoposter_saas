@@ -35,6 +35,7 @@ from keyboards import (
     build_creative_publish_settings_menu,
     build_creative_intake_menu,
     build_creative_campaigns_menu,
+    build_creative_advanced_menu,
     build_creative_variety_menu,
     build_creative_variation_level_menu,
     build_creative_post_types_menu,
@@ -3615,12 +3616,16 @@ def build_creative_publish_settings_submenu(cfg: dict) -> InlineKeyboardMarkup:
     return build_creative_publish_settings_menu(ui_pack(cfg))
 
 
-def build_creative_intake_submenu(cfg: dict) -> InlineKeyboardMarkup:
-    return build_creative_intake_menu(ui_pack(cfg))
+def build_creative_intake_submenu(cfg: dict, show_resume: bool = False) -> InlineKeyboardMarkup:
+    return build_creative_intake_menu(ui_pack(cfg), show_resume)
 
 
-def build_creative_campaigns_submenu(cfg: dict) -> InlineKeyboardMarkup:
-    return build_creative_campaigns_menu(ui_pack(cfg))
+def build_creative_campaigns_submenu(cfg: dict, show_resume: bool = False) -> InlineKeyboardMarkup:
+    return build_creative_campaigns_menu(ui_pack(cfg), show_resume)
+
+
+def build_creative_advanced_submenu(cfg: dict) -> InlineKeyboardMarkup:
+    return build_creative_advanced_menu(ui_pack(cfg))
 
 
 def build_creative_variety_submenu(cfg: dict) -> InlineKeyboardMarkup:
@@ -4953,6 +4958,14 @@ def creative_menu_text(cfg: dict, selected_channel: str) -> str:
     )
 
 
+def _flow_control_hint(cfg: dict) -> str:
+    return ui_text(cfg, "flow_controls_hint")
+
+
+def _flow_question_prompt(cfg: dict, questions: list[tuple[str, str]], step: int) -> str:
+    return f"{step + 1}/{len(questions)}. {questions[step][1]}\n\n{_flow_control_hint(cfg)}"
+
+
 def _rss_quickstart_steps_status(user_id: int, cfg: dict) -> list[tuple[str, bool]]:
     has_feed = bool(cfg.get("feeds"))
     has_prompt = bool((get_mode_prompt(user_id, cfg, "rss") or "").strip())
@@ -5309,6 +5322,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "ui:creative:ideas",
         "ui:creative:campaigns",
         "ui:creative:publish_settings",
+        "ui:creative:advanced",
         "ui:creative:contentplan",
         "ui:creative:sources",
         "ui:creative:variety",
@@ -5575,10 +5589,20 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
         await q.answer()
         text = ui_text(cfg, "channel_intake_intro") + "\n\n" + selected_channel_text(cfg, selected)
+        pending_intake = context.user_data.get("awaiting_creative_intake")
+        if isinstance(pending_intake, dict):
+            step = int(pending_intake.get("step", 0))
+            total = len(creative_channel_intake_questions(cfg))
+            text += "\n\n" + ui_text(cfg, "flow_resume_hint").format(
+                step=min(step + 1, total),
+                total=total,
+                flow=ui_text(cfg, "flow_name_channel_intake"),
+            )
+        has_pending_intake = isinstance(context.user_data.get("awaiting_creative_intake"), dict)
         try:
-            await q.edit_message_text(text=text, reply_markup=build_creative_intake_submenu(cfg))
+            await q.edit_message_text(text=text, reply_markup=build_creative_intake_submenu(cfg, has_pending_intake))
         except BadRequest:
-            await q.message.reply_text(text=text, reply_markup=build_creative_intake_submenu(cfg))
+            await q.message.reply_text(text=text, reply_markup=build_creative_intake_submenu(cfg, has_pending_intake))
         return
 
     if data == "ui:creative:intake:view":
@@ -5602,7 +5626,23 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await q.message.reply_text(
             ui_text(cfg, "channel_intake_start")
             + "\n\n"
-            + f"1/{len(questions)}. {questions[0][1]}"
+            + _flow_question_prompt(cfg, questions, 0)
+        )
+        return
+
+    if data == "ui:creative:intake:resume":
+        awaiting = context.user_data.get("awaiting_creative_intake")
+        questions = creative_channel_intake_questions(cfg)
+        if not isinstance(awaiting, dict):
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "flow_nothing_to_resume"), reply_markup=build_creative_intake_submenu(cfg))
+            return
+        step = max(0, min(int(awaiting.get("step", 0)), len(questions) - 1))
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "flow_resuming").format(flow=ui_text(cfg, "flow_name_channel_intake"), step=step + 1, total=len(questions))
+            + "\n\n"
+            + _flow_question_prompt(cfg, questions, step)
         )
         return
 
@@ -5618,7 +5658,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await q.message.reply_text(
             ui_text(cfg, "quickstart_start")
             + "\n\n"
-            + f"1/{len(questions)}. {questions[0][1]}"
+            + _flow_question_prompt(cfg, questions, 0)
         )
         return
 
@@ -5658,10 +5698,18 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
         await q.answer()
-        await q.message.reply_text(
-            ui_text(cfg, "campaigns_intro") + "\n\n" + selected_channel_text(cfg, selected),
-            reply_markup=build_creative_campaigns_submenu(cfg),
-        )
+        intro = ui_text(cfg, "campaigns_intro") + "\n\n" + selected_channel_text(cfg, selected)
+        pending_campaign = context.user_data.get("awaiting_campaign_create")
+        if isinstance(pending_campaign, dict):
+            step = int(pending_campaign.get("step", 0))
+            total = len(creative_campaign_questions(cfg))
+            intro += "\n\n" + ui_text(cfg, "flow_resume_hint").format(
+                step=min(step + 1, total),
+                total=total,
+                flow=ui_text(cfg, "flow_name_campaign"),
+            )
+        has_pending_campaign = isinstance(context.user_data.get("awaiting_campaign_create"), dict)
+        await q.message.reply_text(intro, reply_markup=build_creative_campaigns_submenu(cfg, has_pending_campaign))
         return
 
     if data == "ui:creative:campaigns:create":
@@ -5672,8 +5720,47 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await q.message.reply_text(
             ui_text(cfg, "campaign_create_start")
             + "\n\n"
-            + f"1/{len(questions)}. {questions[0][1]}"
+            + _flow_question_prompt(cfg, questions, 0)
         )
+        return
+
+    if data == "ui:creative:campaigns:create:resume":
+        awaiting = context.user_data.get("awaiting_campaign_create")
+        questions = creative_campaign_questions(cfg)
+        if not isinstance(awaiting, dict):
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "flow_nothing_to_resume"), reply_markup=build_creative_campaigns_submenu(cfg))
+            return
+        step = max(0, min(int(awaiting.get("step", 0)), len(questions) - 1))
+        await q.answer()
+        await q.message.reply_text(
+            ui_text(cfg, "flow_resuming").format(flow=ui_text(cfg, "flow_name_campaign"), step=step + 1, total=len(questions))
+            + "\n\n"
+            + _flow_question_prompt(cfg, questions, step)
+        )
+        return
+
+    if data == "ui:creative:advanced":
+        if not await enforce_mode_paywall(update, cfg, "creator"):
+            return
+        selected, state = require_channel_context(cfg, context, "creative_advanced")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "creative_advanced", "ui:mode:creative:menu"),
+            )
+            return
+        await q.answer()
+        text = ui_text(cfg, "creative_advanced_title") + "\n\n" + selected_channel_text(cfg, selected) + "\n\n" + ui_text(cfg, "creative_advanced_intro")
+        try:
+            await q.edit_message_text(text=text, reply_markup=build_creative_advanced_submenu(cfg))
+        except BadRequest:
+            await q.message.reply_text(text=text, reply_markup=build_creative_advanced_submenu(cfg))
         return
 
     if data == "ui:creative:campaigns:view":
@@ -6225,6 +6312,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     entities=_load_message_entities([_message_entity_to_dict(e) for e in creator_entities], offset_shift=len(preview_prefix)) or None,
                     reply_markup=build_creative_submenu(cfg),
                 )
+                await q.message.reply_text(ui_text(cfg, "preview_ready_guidance"), reply_markup=build_creative_submenu(cfg))
                 diagnostics = creative_preview_diagnostics_text(cfg)
                 if diagnostics:
                     await q.message.reply_text(diagnostics, reply_markup=build_creative_submenu(cfg))
@@ -6872,7 +6960,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         cfg[key] = not bool(cfg.get(key, False))
         save_client(user_id, cfg)
         await q.answer()
-        text = output_settings_text(cfg, mode)
+        text = ui_text(cfg, "publish_setting_updated") + "\n\n" + output_settings_text(cfg, mode)
         submenu = build_creative_output_submenu(cfg) if mode == "creative" else build_rss_output_submenu(cfg)
         try:
             await q.edit_message_text(text=text, reply_markup=submenu)
@@ -8019,12 +8107,24 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         questions = creative_campaign_questions(cfg)
         step = int(awaiting_campaign_create.get("step", 0))
         answers = awaiting_campaign_create.get("answers") or {}
-        if text.lower() == "cancel":
+        normalized = text.lower().strip()
+        if normalized == "cancel":
             context.user_data.pop("awaiting_campaign_create", None)
             await update.message.reply_text(ui_text(cfg, "campaign_create_cancelled"), reply_markup=build_creative_campaigns_submenu(cfg))
             return
+        if normalized == "resume":
+            step = max(0, min(step, len(questions) - 1))
+            await update.message.reply_text(_flow_question_prompt(cfg, questions, step))
+            return
+        if normalized in {"help", "example"}:
+            step = max(0, min(step, len(questions) - 1))
+            await update.message.reply_text(ui_text(cfg, "flow_help_tip") + "\n\n" + _flow_question_prompt(cfg, questions, step))
+            return
         key = questions[step][0]
-        answers[key] = text[:500]
+        if normalized in {"skip", "-"}:
+            answers[key] = ""
+        else:
+            answers[key] = text[:500]
         step += 1
         if step < len(questions):
             context.user_data["awaiting_campaign_create"] = {
@@ -8032,7 +8132,7 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "step": step,
                 "answers": answers,
             }
-            await update.message.reply_text(f"{step + 1}/{len(questions)}. {questions[step][1]}")
+            await update.message.reply_text(_flow_question_prompt(cfg, questions, step))
             return
         context.user_data.pop("awaiting_campaign_create", None)
         campaigns = creative_campaigns(cfg)
@@ -8073,12 +8173,24 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         questions = creative_fast_start_questions(cfg)
         step = int(awaiting_fast_start.get("step", 0))
         answers = awaiting_fast_start.get("answers") or {}
-        if text.lower() == "cancel":
+        normalized = text.lower().strip()
+        if normalized == "cancel":
             context.user_data.pop("awaiting_creative_fast_start", None)
             await update.message.reply_text(ui_text(cfg, "quickstart_cancelled"), reply_markup=build_creative_intake_submenu(cfg))
             return
+        if normalized == "resume":
+            step = max(0, min(step, len(questions) - 1))
+            await update.message.reply_text(_flow_question_prompt(cfg, questions, step))
+            return
+        if normalized in {"help", "example"}:
+            step = max(0, min(step, len(questions) - 1))
+            await update.message.reply_text(ui_text(cfg, "flow_help_tip") + "\n\n" + _flow_question_prompt(cfg, questions, step))
+            return
         key = questions[step][0]
-        answers[key] = text[:700]
+        if normalized in {"skip", "-"}:
+            answers[key] = ""
+        else:
+            answers[key] = text[:700]
         step += 1
         if step < len(questions):
             context.user_data["awaiting_creative_fast_start"] = {
@@ -8086,7 +8198,7 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "step": step,
                 "answers": answers,
             }
-            await update.message.reply_text(f"{step + 1}/{len(questions)}. {questions[step][1]}")
+            await update.message.reply_text(_flow_question_prompt(cfg, questions, step))
             return
         context.user_data.pop("awaiting_creative_fast_start", None)
         selected_channel = (awaiting_fast_start.get("channel") or "").strip()
@@ -8129,12 +8241,24 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         questions = creative_channel_intake_questions(cfg)
         step = int(awaiting_intake.get("step", 0))
         answers = awaiting_intake.get("answers") or {}
-        if text.lower() == "cancel":
+        normalized = text.lower().strip()
+        if normalized == "cancel":
             context.user_data.pop("awaiting_creative_intake", None)
             await update.message.reply_text(ui_text(cfg, "channel_intake_cancelled"), reply_markup=build_creative_intake_submenu(cfg))
             return
+        if normalized == "resume":
+            step = max(0, min(step, len(questions) - 1))
+            await update.message.reply_text(_flow_question_prompt(cfg, questions, step))
+            return
+        if normalized in {"help", "example"}:
+            step = max(0, min(step, len(questions) - 1))
+            await update.message.reply_text(ui_text(cfg, "flow_help_tip") + "\n\n" + _flow_question_prompt(cfg, questions, step))
+            return
         key = questions[step][0]
-        answers[key] = text[:1200]
+        if normalized in {"skip", "-"}:
+            answers[key] = ""
+        else:
+            answers[key] = text[:1200]
         step += 1
         if step < len(questions):
             context.user_data["awaiting_creative_intake"] = {
@@ -8142,7 +8266,7 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "step": step,
                 "answers": answers,
             }
-            await update.message.reply_text(f"{step + 1}/{len(questions)}. {questions[step][1]}")
+            await update.message.reply_text(_flow_question_prompt(cfg, questions, step))
             return
         context.user_data.pop("awaiting_creative_intake", None)
         selected_channel = (awaiting_intake.get("channel") or "").strip()
