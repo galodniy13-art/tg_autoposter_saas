@@ -9,10 +9,10 @@ TEXTS = {
             "• 5 posts/day — $3/month\n"
             "• 10 posts/day — $5/month\n"
             "• 20 posts/day — $8/month\n• 40 posts/day — $12/month\n\n"
-            "Creative mode (account-wide daily limit shared across all your channels):\n"
-            "• 5 posts/day — $5/month\n"
-            "• 10 posts/day — $8/month\n"
-            "• 20 posts/day — $13/month\n• 40 posts/day — $20/month\n\n"
+            "Creative mode (account-wide monthly post pool shared across all your channels):\n"
+            "• 30 posts/month — $5/month\n"
+            "• 60 posts/month — $8/month\n"
+            "• 100 posts/month — $13/month\n• 200 posts/month — $20/month\n\n"
             "Channel slots are purchased separately (how many channels you can connect).\n"
             "You can combine RSS + Creative access.\n"
             "To activate, message: @a_karaglan, @a_karaglanov\n\n"
@@ -28,10 +28,10 @@ TEXTS = {
         "rss_locked": "🔒 RSS + AI mode is unavailable for your account.",
         "creative_paywall":
             "Creative mode pricing (USD/month):\n"
-            "(Account-wide daily limit shared across all connected channels)\n"
-            "• 5/day — $5/month\n"
-            "• 10/day — $8/month\n"
-            "• 20/day — $13/month\n• 40/day — $20/month\n\n"
+            "(Account-wide monthly post pool shared across all connected channels)\n"
+            "• 30/month — $5/month\n"
+            "• 60/month — $8/month\n"
+            "• 100/month — $13/month\n• 200/month — $20/month\n\n"
             "Channel slots are managed separately.\n"
             "To activate, message: @a_karaglan, @a_karaglanov\n\n"
             "🔻 Discount for upfront payment\n\n"
@@ -440,8 +440,17 @@ TEXTS = {
         "status_id": "ID",
         "status_channels": "Channels",
         "status_rss_daily": "RSS posts/day available",
-        "status_creative_daily": "Creative posts/day available",
+        "status_creative_monthly_pool": "Creative monthly pool",
+        "status_creative_monthly_used": "Creative posts used this month",
+        "status_creative_monthly_remaining": "Creative posts remaining this month",
+        "status_creative_monthly_period": "Creative pool period",
         "status_valid_until": "Subscription valid until",
+        "posting_limit_reached": "Posting limit reached for the current period.",
+        "creative_quota_title": "📦 Creative monthly quota",
+        "creative_quota_pool": "• Monthly pool: {pool}",
+        "creative_quota_used": "• Used this month: {used}",
+        "creative_quota_remaining": "• Remaining this month: {remaining}",
+        "creative_quota_period": "• Reset period: {period} (YYYY-MM)",
         "status_not_set": "not set",
         "status_inactive": "inactive",
         "status_title": "📊 Account status",
@@ -569,10 +578,10 @@ TEXTS = {
             "• 5 постов/день — $3/месяц\n"
             "• 10 постов/день — $5/месяц\n"
             "• 20 постов/день — $8/месяц\n• 40 постов/день — $12/месяц\n\n"
-            "Creative-режим (дневной лимит на аккаунт, общий для всех каналов):\n"
-            "• 5 постов/день — $5/месяц\n"
-            "• 10 постов/день — $8/месяц\n"
-            "• 20 постов/день — $13/месяц\n• 40 постов/день — $20/месяц\n\n"
+            "Creative-режим (месячный пул постов на аккаунт, общий для всех каналов):\n"
+            "• 30 постов/месяц — $5/месяц\n"
+            "• 60 постов/месяц — $8/месяц\n"
+            "• 100 постов/месяц — $13/месяц\n• 200 постов/месяц — $20/месяц\n\n"
             "Слоты каналов покупаются отдельно (сколько каналов можно подключить).\n"
             "Можно комбинировать RSS + Creative доступ.\n"
             "Для активации напишите: @a_karaglan, @a_karaglanov\n\n"
@@ -588,10 +597,10 @@ TEXTS = {
         "rss_locked": "🔒 Режим RSS + AI недоступен для вашего аккаунта.",
         "creative_paywall":
             "Стоимость Creative-режима (USD/месяц):\n"
-            "(Дневной лимит на аккаунт, общий для всех подключённых каналов)\n"
-            "• 5/день — $5/месяц\n"
-            "• 10/день — $8/месяц\n"
-            "• 20/день — $13/месяц\n• 40/день — $20/месяц\n\n"
+            "(Месячный пул постов на аккаунт, общий для всех подключённых каналов)\n"
+            "• 30/месяц — $5/месяц\n"
+            "• 60/месяц — $8/месяц\n"
+            "• 100/месяц — $13/месяц\n• 200/месяц — $20/месяц\n\n"
             "Слоты каналов управляются отдельно.\n"
             "Для активации напишите: @a_karaglan, @a_karaglanov\n\n"
             "🔻 Скидка при оплате сразу\n\n"
@@ -1000,8 +1009,17 @@ TEXTS = {
         "status_id": "ID",
         "status_channels": "Каналы",
         "status_rss_daily": "Доступно RSS постов/день",
-        "status_creative_daily": "Доступно Creative постов/день",
+        "status_creative_monthly_pool": "Creative-пул на месяц",
+        "status_creative_monthly_used": "Creative использовано в этом месяце",
+        "status_creative_monthly_remaining": "Creative осталось в этом месяце",
+        "status_creative_monthly_period": "Период Creative-пула",
         "status_valid_until": "Подписка активна до",
+        "posting_limit_reached": "Лимит постов за текущий период исчерпан.",
+        "creative_quota_title": "📦 Creative квота на месяц",
+        "creative_quota_pool": "• Пул на месяц: {pool}",
+        "creative_quota_used": "• Использовано в этом месяце: {used}",
+        "creative_quota_remaining": "• Осталось в этом месяце: {remaining}",
+        "creative_quota_period": "• Период сброса: {period} (ГГГГ-ММ)",
         "status_not_set": "не задано",
         "status_inactive": "не активна",
         "status_title": "📊 Статус аккаунта",

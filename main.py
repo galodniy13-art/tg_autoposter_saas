@@ -323,12 +323,12 @@ def rss_mode_allowed(cfg: dict) -> bool:
 
 
 def creative_mode_allowed(cfg: dict) -> bool:
-    return int(cfg.get("creative_daily_limit", 0) or 0) > 0
+    return creative_monthly_limit(cfg) > 0
 
 
 def mode_limit(cfg: dict, mode: str) -> int:
     if mode == "creator":
-        return int(cfg.get("creative_daily_limit", 0) or 0)
+        return creative_monthly_limit(cfg)
     return int(cfg.get("rss_daily_limit", 0) or 0)
 
 
@@ -464,6 +464,9 @@ DEFAULT_CLIENT = {
     "daily_date": str(date.today()),
     "rss_daily_limit": 0,
     "creative_daily_limit": 0,
+    "creative_monthly_limit": 0,
+    "creative_monthly_period": None,
+    "creative_monthly_count": 0,
     "creative_variation_level": "balanced",
     "creative_post_types": list(CREATIVE_POST_TYPES),
     "creative_avoid_repetition": True,
@@ -828,7 +831,32 @@ def ensure_mode_daily_counter(cfg: dict, mode: str) -> dict:
         cfg[count_key] = 0
     return cfg
 
+
+def _current_month_key() -> str:
+    return date.today().strftime("%Y-%m")
+
+
+def creative_monthly_limit(cfg: dict) -> int:
+    explicit = int(cfg.get("creative_monthly_limit", 0) or 0)
+    if explicit > 0:
+        return explicit
+    legacy_daily = int(cfg.get("creative_daily_limit", 0) or 0)
+    if legacy_daily > 0:
+        return legacy_daily * 30
+    return 0
+
+
+def ensure_creative_monthly_counter(cfg: dict) -> dict:
+    month_key = _current_month_key()
+    if cfg.get("creative_monthly_period") != month_key:
+        cfg["creative_monthly_period"] = month_key
+        cfg["creative_monthly_count"] = 0
+    return cfg
+
 def can_post_more(cfg: dict, mode: str) -> bool:
+    if mode == "creator":
+        cfg = ensure_creative_monthly_counter(cfg)
+        return int(cfg.get("creative_monthly_count", 0) or 0) < creative_monthly_limit(cfg)
     cfg = ensure_mode_daily_counter(cfg, mode)
     _, count_key = _mode_daily_keys(mode)
     return int(cfg.get(count_key, 0) or 0) < mode_limit(cfg, mode)
@@ -837,6 +865,10 @@ def bump_daily_count(cfg: dict, mode: str | None = None) -> None:
     mode = (mode or cfg.get("mode") or "rss").strip().lower()
     if mode not in ("rss", "creator"):
         mode = "rss"
+    if mode == "creator":
+        cfg = ensure_creative_monthly_counter(cfg)
+        cfg["creative_monthly_count"] = int(cfg.get("creative_monthly_count", 0) or 0) + 1
+        return
     cfg = ensure_mode_daily_counter(cfg, mode)
     _, count_key = _mode_daily_keys(mode)
     cfg[count_key] = int(cfg.get(count_key, 0) or 0) + 1
@@ -4157,6 +4189,25 @@ def schedule_summary_for_mode(cfg: dict, mode: str) -> str:
     )
 
 
+def creative_quota_summary_text(cfg: dict) -> str:
+    cfg = ensure_creative_monthly_counter(cfg)
+    monthly_pool = creative_monthly_limit(cfg)
+    used = int(cfg.get("creative_monthly_count", 0) or 0)
+    remaining = max(monthly_pool - used, 0)
+    period = cfg.get("creative_monthly_period") or _current_month_key()
+    return (
+        ui_text(cfg, "creative_quota_title")
+        + "\n"
+        + ui_text(cfg, "creative_quota_pool").format(pool=monthly_pool)
+        + "\n"
+        + ui_text(cfg, "creative_quota_used").format(used=used)
+        + "\n"
+        + ui_text(cfg, "creative_quota_remaining").format(remaining=remaining)
+        + "\n"
+        + ui_text(cfg, "creative_quota_period").format(period=period)
+    )
+
+
 def mode_uses_interval(cfg: dict, mode: str) -> bool:
     key = f"{mode}_use_interval"
     if key in cfg:
@@ -4813,6 +4864,16 @@ def rss_menu_text(user_id: int, cfg: dict, selected_channel: str) -> str:
     )
 
 
+def creative_menu_text(cfg: dict, selected_channel: str) -> str:
+    return (
+        ui_text(cfg, "creative_menu_title")
+        + "\n\n"
+        + selected_channel_text(cfg, selected_channel)
+        + "\n\n"
+        + creative_quota_summary_text(cfg)
+    )
+
+
 def _rss_quickstart_steps_status(user_id: int, cfg: dict) -> list[tuple[str, bool]]:
     has_feed = bool(cfg.get("feeds"))
     has_prompt = bool((get_mode_prompt(user_id, cfg, "rss") or "").strip())
@@ -5071,12 +5132,15 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
-    cfg = ensure_daily_counter(load_client(user_id))
+    cfg = ensure_creative_monthly_counter(ensure_daily_counter(load_client(user_id)))
     sub = cfg.get("subscription_until") or ui_text(cfg, "status_inactive")
     channels = get_saved_channels(cfg)
     channels_text = "\n".join([f"• {channel_display_name(cfg, ch)}" for ch in channels]) if channels else ui_text(cfg, "status_not_set")
     rss_daily = int(cfg.get("rss_daily_limit", 0) or 0)
-    creative_daily = int(cfg.get("creative_daily_limit", 0) or 0)
+    creative_monthly = creative_monthly_limit(cfg)
+    creative_used = int(cfg.get("creative_monthly_count", 0) or 0)
+    creative_remaining = max(creative_monthly - creative_used, 0)
+    creative_period = cfg.get("creative_monthly_period") or _current_month_key()
 
     id_label = f"🆔 {ui_text(cfg, 'status_id')}:"
     id_value = str(user_id)
@@ -5085,7 +5149,10 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"{id_label}\n<code>{id_value}</code>\n\n"
         f"📺 {ui_text(cfg, 'status_channels')}:\n{channels_text}\n\n"
         f"📰 {ui_text(cfg, 'status_rss_daily')}: {rss_daily}\n"
-        f"✨ {ui_text(cfg, 'status_creative_daily')}: {creative_daily}\n"
+        f"✨ {ui_text(cfg, 'status_creative_monthly_pool')}: {creative_monthly}\n"
+        f"✨ {ui_text(cfg, 'status_creative_monthly_used')}: {creative_used}\n"
+        f"✨ {ui_text(cfg, 'status_creative_monthly_remaining')}: {creative_remaining}\n"
+        f"✨ {ui_text(cfg, 'status_creative_monthly_period')}: {creative_period}\n"
         f"📅 {ui_text(cfg, 'status_valid_until')}: {sub}"
     )
     raw_mode = (cfg.get("mode") or "rss").strip().lower()
@@ -5224,7 +5291,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         route_data = data
         if action == "creative_menu":
-            text = ui_text(cfg, "creative_menu_title") + "\n\n" + selected_channel_text(cfg, selected)
+            text = creative_menu_text(cfg, selected)
             await q.message.reply_text(text, reply_markup=build_creative_submenu(cfg))
             return
         if action == "rss_menu":
@@ -5382,7 +5449,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             return
         logger.info("[NAV_ENTER] screen=creative_menu channel=%s", selected)
         await q.answer()
-        text = ui_text(cfg, "creative_menu_title") + "\n\n" + selected_channel_text(cfg, selected)
+        text = creative_menu_text(cfg, selected)
         try:
             await q.edit_message_text(text=text, reply_markup=build_creative_submenu(cfg))
         except BadRequest:
@@ -7092,8 +7159,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await q.answer()
             await q.message.reply_text(ui_text(cfg, "prompt_builder_cancelled"))
             selected_channel = (builder.get("selected_channel") or cfg.get("channel") or "").strip()
-            menu_text = ui_text(cfg, "creative_menu_title") if mode == "creative" else ui_text(cfg, "rss_menu_title")
-            if selected_channel:
+            menu_text = creative_menu_text(cfg, selected_channel) if mode == "creative" else ui_text(cfg, "rss_menu_title")
+            if selected_channel and mode != "creative":
                 menu_text = menu_text + "\n\n" + selected_channel_text(cfg, selected_channel)
             await q.message.reply_text(
                 menu_text,
@@ -7113,8 +7180,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             context.user_data.pop("prompt_builder", None)
             await q.answer()
             await q.message.reply_text(ui_text(cfg, "prompt_builder_saved"))
-            menu_text = ui_text(cfg, "creative_menu_title") if mode == "creative" else ui_text(cfg, "rss_menu_title")
-            if selected_channel:
+            menu_text = creative_menu_text(cfg, selected_channel) if mode == "creative" else ui_text(cfg, "rss_menu_title")
+            if selected_channel and mode != "creative":
                 menu_text = menu_text + "\n\n" + selected_channel_text(cfg, selected_channel)
             await q.message.reply_text(
                 menu_text,
@@ -7160,8 +7227,8 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             save_client(user_id, cfg)
             context.user_data.pop("copy_style_review", None)
             await q.answer()
-            menu_text = ui_text(cfg, "creative_menu_title") if mode == "creative" else ui_text(cfg, "rss_menu_title")
-            if selected_channel:
+            menu_text = creative_menu_text(cfg, selected_channel) if mode == "creative" else ui_text(cfg, "rss_menu_title")
+            if selected_channel and mode != "creative":
                 menu_text = menu_text + "\n\n" + selected_channel_text(cfg, selected_channel)
             await q.message.reply_text(
                 ui_text(cfg, "copy_style_success")
@@ -8033,7 +8100,7 @@ async def wizard_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(
                 ui_text(cfg, "prompt_builder_cancelled")
                 + "\n\n"
-                + (ui_text(cfg, "creative_menu_title") if mode == "creative" else ui_text(cfg, "rss_menu_title")),
+                + (creative_menu_text(cfg, cfg.get("channel") or "—") if mode == "creative" else ui_text(cfg, "rss_menu_title")),
                 reply_markup=build_creative_submenu(cfg) if mode == "creative" else build_rss_submenu(cfg),
             )
             return
@@ -8523,7 +8590,7 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     if not can_post_more(cfg, required_mode):
-        await reply_ui(update, "Daily limit reached.", cfg, show_menu=True)
+        await reply_ui(update, ui_text(cfg, "posting_limit_reached"), cfg, show_menu=True)
         return
 
     channel = cfg.get("channel")
@@ -8689,27 +8756,27 @@ async def setcreative_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /setcreative <user_id> <posts_per_day> [days]")
+        await update.message.reply_text("Usage: /setcreative <user_id> <posts_per_month> [days]")
         return
 
     uid_raw, limit_raw = context.args[0].strip(), context.args[1].strip()
     if not uid_raw.isdigit() or not limit_raw.isdigit():
-        await update.message.reply_text("Usage: /setcreative <user_id> <posts_per_day> [days]")
+        await update.message.reply_text("Usage: /setcreative <user_id> <posts_per_month> [days]")
         return
 
     uid = int(uid_raw)
     limit = int(limit_raw)
     if limit < 0 or limit > 5000:
-        await update.message.reply_text("posts_per_day range: 0..5000")
+        await update.message.reply_text("posts_per_month range: 0..5000")
         return
 
     expires_text = "unchanged"
     cfg = load_client(uid)
-    cfg["creative_daily_limit"] = limit
+    cfg["creative_monthly_limit"] = limit
     if len(context.args) >= 3:
         days_raw = context.args[2].strip()
         if not days_raw.isdigit():
-            await update.message.reply_text("Usage: /setcreative <user_id> <posts_per_day> [days]")
+            await update.message.reply_text("Usage: /setcreative <user_id> <posts_per_month> [days]")
             return
         days = int(days_raw)
         if days == 0:
@@ -8726,7 +8793,7 @@ async def setcreative_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "✅ Access updated\n"
         f"user_id: {uid}\n"
         f"mode: Creative\n"
-        f"daily_limit: {limit}\n"
+        f"monthly_limit: {limit}\n"
         f"expires: {expires_text}"
     )
 
