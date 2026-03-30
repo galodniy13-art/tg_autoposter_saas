@@ -100,6 +100,7 @@ def build_creative_publish_settings_menu(labels: dict) -> InlineKeyboardMarkup:
 def build_creative_intake_menu(labels: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton(labels["btn_channel_intake_fast_start"], callback_data="ui:creative:intake:fast_start")],
             [InlineKeyboardButton(labels["btn_channel_intake_start"], callback_data="ui:creative:intake:start")],
             [InlineKeyboardButton(labels["btn_channel_intake_view"], callback_data="ui:creative:intake:view")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
