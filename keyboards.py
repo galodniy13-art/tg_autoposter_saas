@@ -77,15 +77,43 @@ def build_modes_menu(labels: dict) -> InlineKeyboardMarkup:
 def build_creative_menu(labels: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton(labels["btn_edit_prompt"], callback_data="ui:creative:stylemenu")],
+            [InlineKeyboardButton(labels["btn_channel_intake"], callback_data="ui:creative:intake")],
+            [InlineKeyboardButton(labels["btn_idea_bank"], callback_data="ui:creative:ideas")],
+            [InlineKeyboardButton(labels["btn_campaigns"], callback_data="ui:creative:campaigns")],
+            [InlineKeyboardButton(labels["btn_creative_publish_settings"], callback_data="ui:creative:publish_settings")],
             [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:creative:preview")],
-            [InlineKeyboardButton(labels["btn_content_plan"], callback_data="ui:creative:contentplan")],
-            [InlineKeyboardButton(labels["btn_source_center"], callback_data="ui:creative:sources")],
-            [InlineKeyboardButton(labels["btn_content_variety"], callback_data="ui:creative:variety")],
-            [InlineKeyboardButton(labels["btn_visual_support"], callback_data="ui:creative:visual")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:modes")],
+        ]
+    )
+
+
+def build_creative_publish_settings_menu(labels: dict) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
             [InlineKeyboardButton(labels["btn_scheduling"], callback_data="ui:schedule:creative:menu")],
             [InlineKeyboardButton(labels["btn_post_format"], callback_data="ui:creative:output")],
-            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:modes")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
+        ]
+    )
+
+
+def build_creative_intake_menu(labels: dict) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(labels["btn_channel_intake_start"], callback_data="ui:creative:intake:start")],
+            [InlineKeyboardButton(labels["btn_channel_intake_view"], callback_data="ui:creative:intake:view")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
+        ]
+    )
+
+
+def build_creative_campaigns_menu(labels: dict) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(labels["btn_campaign_create"], callback_data="ui:creative:campaigns:create")],
+            [InlineKeyboardButton(labels["btn_campaign_view"], callback_data="ui:creative:campaigns:view")],
+            [InlineKeyboardButton(labels["btn_campaign_activate"], callback_data="ui:creative:campaigns:activate")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu")],
         ]
     )
 
@@ -252,14 +280,15 @@ def build_creative_source_center_menu(labels: dict) -> InlineKeyboardMarkup:
 
 def build_creative_source_list_menu(labels: dict, source_type: str) -> InlineKeyboardMarkup:
     base = f"ui:creative:sources:{source_type}"
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton(labels["btn_view_items"], callback_data=f"{base}:view")],
-            [InlineKeyboardButton(labels["btn_add_item"], callback_data=f"{base}:add")],
-            [InlineKeyboardButton(labels["btn_delete_item"], callback_data=f"{base}:delete")],
-            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:creative:sources")],
-        ]
-    )
+    rows = [
+        [InlineKeyboardButton(labels["btn_view_items"], callback_data=f"{base}:view")],
+        [InlineKeyboardButton(labels["btn_add_item"], callback_data=f"{base}:add")],
+    ]
+    if source_type == "idea_bank":
+        rows.append([InlineKeyboardButton(labels["btn_idea_generate"], callback_data=f"{base}:generate")])
+    rows.append([InlineKeyboardButton(labels["btn_delete_item"], callback_data=f"{base}:delete")])
+    rows.append([InlineKeyboardButton(labels["btn_back"], callback_data="ui:creative:ideas" if source_type == "idea_bank" else "ui:creative:sources")])
+    return InlineKeyboardMarkup(rows)
 
 
 def build_creative_source_delete_menu(labels: dict, source_type: str, items: list[str]) -> InlineKeyboardMarkup:
