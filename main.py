@@ -3690,6 +3690,8 @@ def creative_source_list_text(cfg: dict, source_type: str, selected_channel: str
     meta = CREATIVE_SOURCE_META[source_type]
     items = creative_source_items(cfg, meta["key"])
     lines = [ui_text(cfg, meta["title_key"]), "", selected_channel_text(cfg, selected_channel), ""]
+    if source_type == "idea_bank":
+        lines.extend([ui_text(cfg, "source_idea_bank_intro"), ""])
     if not items:
         lines.append(ui_text(cfg, meta["empty_key"]))
         return "\n".join(lines)
@@ -3812,6 +3814,49 @@ def creative_intake_summary_text(cfg: dict, selected_channel: str) -> str:
     if active:
         lines.extend(["", ui_text(cfg, "campaign_active_label").format(name=str(active.get("goal") or "Campaign"))])
     return "\n".join(lines)
+
+
+def _looks_vague_context_text(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    generic_markers = {
+        "everyone",
+        "all",
+        "anyone",
+        "people",
+        "business",
+        "general",
+        "все",
+        "для всех",
+        "люди",
+        "любой",
+        "бизнес",
+        "общее",
+    }
+    if lowered in generic_markers:
+        return True
+    words = [w for w in re.split(r"[^a-zA-Zа-яА-Я0-9]+", text) if w]
+    return len(words) < 4
+
+
+def creative_preview_diagnostics_text(cfg: dict) -> str:
+    intake = cfg.get("creative_channel_intake") if isinstance(cfg.get("creative_channel_intake"), dict) else {}
+    if not intake:
+        return ""
+    hints: list[str] = []
+    if _looks_vague_context_text(str(intake.get("audience") or "")):
+        hints.append(ui_text(cfg, "preview_diag_audience"))
+    if _looks_vague_context_text(str(intake.get("offers") or "")):
+        hints.append(ui_text(cfg, "preview_diag_offer"))
+    if _looks_vague_context_text(str(intake.get("audience_pains") or "")):
+        hints.append(ui_text(cfg, "preview_diag_objections"))
+    if _looks_vague_context_text(str(intake.get("good_posts") or "")):
+        hints.append(ui_text(cfg, "preview_diag_examples"))
+    if len(hints) < 2:
+        return ""
+    return ui_text(cfg, "preview_diag_intro") + "\n• " + "\n• ".join(hints[:2])
 
 
 def creative_campaigns(cfg: dict) -> list[dict]:
@@ -5959,7 +6004,9 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 intake = cfg.get("creative_channel_intake") if isinstance(cfg.get("creative_channel_intake"), dict) else {}
                 prompt = (
                     "Generate 10 concise creator idea bank entries as plain lines.\n"
-                    "Mix formats: post idea, hook, angle, pain, desire, objection, story, proof, FAQ, launch idea.\n"
+                    "Each line should start with one strategic bucket tag and colon.\n"
+                    "Allowed buckets: pain, objection, proof, story, benefit, cta, educational angle.\n"
+                    "Mix different buckets across the list.\n"
                     f"Channel topic: {intake.get('channel_about') if intake else 'N/A'}\n"
                     f"Audience: {intake.get('audience') if intake else 'N/A'}\n"
                     f"Offer: {intake.get('offers') if intake else 'N/A'}\n"
@@ -6178,6 +6225,9 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     entities=_load_message_entities([_message_entity_to_dict(e) for e in creator_entities], offset_shift=len(preview_prefix)) or None,
                     reply_markup=build_creative_submenu(cfg),
                 )
+                diagnostics = creative_preview_diagnostics_text(cfg)
+                if diagnostics:
+                    await q.message.reply_text(diagnostics, reply_markup=build_creative_submenu(cfg))
             except Exception:
                 logger.exception("preview send stage failed for user %s", user_id)
                 await q.message.reply_text(
@@ -8640,6 +8690,9 @@ async def previewonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         creator_entities = apply_bold_title(msg, []) if bool(cfg.get("creative_bold_title", False)) else []
         preview_prefix = "🧪 Preview:\n\n"
         await update.message.reply_text(preview_prefix + msg, entities=_load_message_entities([_message_entity_to_dict(e) for e in creator_entities], offset_shift=len(preview_prefix)) or None, reply_markup=build_main_menu_clean(cfg))
+        diagnostics = creative_preview_diagnostics_text(cfg)
+        if diagnostics:
+            await update.message.reply_text(diagnostics, reply_markup=build_main_menu_clean(cfg))
         return
 
     feeds = cfg.get("feeds", [])
