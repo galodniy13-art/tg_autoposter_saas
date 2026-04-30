@@ -177,6 +177,7 @@ def build_rss_ai_menu(labels: dict, rss_paused: bool = False) -> InlineKeyboardM
     pause_resume_callback = "ui:rss:resume_posting" if rss_paused else "ui:rss:pause_posting"
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton(pause_resume_label, callback_data=pause_resume_callback)],
             [InlineKeyboardButton(labels["btn_rss_quickstart"], callback_data="ui:rss:quickstart")],
             [
                 InlineKeyboardButton(labels["btn_edit_prompt"], callback_data="ui:rss:stylemenu"),
@@ -186,7 +187,6 @@ def build_rss_ai_menu(labels: dict, rss_paused: bool = False) -> InlineKeyboardM
                 InlineKeyboardButton(labels["btn_rss_output_settings"], callback_data="ui:rss:output"),
                 InlineKeyboardButton(labels["btn_scheduling"], callback_data="ui:schedule:rss:menu"),
             ],
-            [InlineKeyboardButton(pause_resume_label, callback_data=pause_resume_callback)],
             [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:rss:preview")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:modes")],
         ]
@@ -226,21 +226,11 @@ def build_style_setup_menu(labels: dict, mode: str, back_callback: str) -> Inlin
 def build_rss_output_menu(labels: dict, include_source_link: bool, use_feed_image: bool, cta_enabled: bool, bold_title_enabled: bool) -> InlineKeyboardMarkup:
     source_label = labels["btn_source_link_on"] if include_source_link else labels["btn_source_link_off"]
     image_label = labels["btn_feed_image_on"] if use_feed_image else labels["btn_feed_image_off"]
-    cta_label = labels["btn_rss_cta_on"] if cta_enabled else labels["btn_rss_cta_off"]
-    bold_label = labels["btn_bold_title_on"] if bold_title_enabled else labels["btn_bold_title_off"]
     return InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(source_label, callback_data="ui:rss:toggle_source_link"),
                 InlineKeyboardButton(image_label, callback_data="ui:rss:toggle_feed_image"),
-            ],
-            [
-                InlineKeyboardButton(cta_label, callback_data="ui:rss:toggle_cta"),
-                InlineKeyboardButton(bold_label, callback_data="ui:rss:toggle_bold_title"),
-            ],
-            [
-                InlineKeyboardButton(labels["btn_edit_template_image"], callback_data="ui:rss:asset:template"),
-                InlineKeyboardButton(labels["btn_edit_watermark"], callback_data="ui:rss:asset:watermark"),
             ],
             [
                 InlineKeyboardButton(labels["btn_emoji_management"], callback_data="ui:rss:emoji:menu"),
@@ -380,7 +370,6 @@ def build_mode_schedule_menu(labels: dict, mode: str, enabled: bool, use_interva
                 InlineKeyboardButton(labels["btn_schedule_quiet_hours"], callback_data=f"ui:schedule:{mode}:quiet"),
             ],
             [
-                InlineKeyboardButton(labels["btn_schedule_freshness"], callback_data=f"ui:schedule:{mode}:freshness"),
                 InlineKeyboardButton(labels["btn_schedule_timezone"], callback_data="ui:schedule:timezone"),
             ],
             [
