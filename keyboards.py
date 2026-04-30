@@ -299,7 +299,7 @@ def build_creative_source_list_menu(labels: dict, source_type: str) -> InlineKey
     if source_type == "idea_bank":
         rows.append([InlineKeyboardButton(labels["btn_idea_generate"], callback_data=f"{base}:generate")])
     rows.append([InlineKeyboardButton(labels["btn_delete_item"], callback_data=f"{base}:delete")])
-    rows.append([InlineKeyboardButton(labels["btn_back"], callback_data="ui:creative:ideas" if source_type == "idea_bank" else "ui:creative:sources")])
+    rows.append([InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:creative:menu" if source_type == "idea_bank" else "ui:creative:sources")])
     return InlineKeyboardMarkup(rows)
 
 
