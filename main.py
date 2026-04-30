@@ -983,12 +983,7 @@ def _find_feed_by_url(feeds: list, url: str) -> bool:
 
 
 def feed_limit_per_channel(cfg: dict) -> int:
-    raw = cfg.get("feed_limit_per_channel", 2)
-    try:
-        limit = int(raw)
-    except (TypeError, ValueError):
-        limit = 2
-    return max(1, limit)
+    return 1
 
 
 def _looks_like_direct_feed_url(url: str) -> bool:
@@ -2340,11 +2335,17 @@ def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int =
                 consider(img_url, priority=priority, base_url=link, marker=marker)
 
         if best_url:
+            if _is_thumbnailish_url(best_url):
+                logger.info("[IMG_PIPELINE_RESULT] stage=extract result=reject_thumbnail_like url=%s", best_url)
+                return None
             logger.info("[IMG_PIPELINE_RESULT] stage=extract result=image_found source=%s", best_url)
             return best_url
 
         og_image = _extract_og_image(link)
         if og_image:
+            if _is_thumbnailish_url(og_image):
+                logger.info("[IMG_PIPELINE_RESULT] stage=extract result=reject_og_thumbnail_like url=%s", og_image)
+                return None
             logger.info("[IMG_PIPELINE_RESULT] stage=extract result=og_image url=%s", og_image)
             return og_image
 
@@ -2433,18 +2434,7 @@ def build_rss_message_payload(cfg: dict, msg: str, link: str) -> tuple[str, list
     if bool(cfg.get("include_rss_source_link", True)):
         base_text = f"{base_text}\n\n{link}"
 
-    entities: list[MessageEntity] = []
-    if bool(cfg.get("rss_cta_enabled", False)):
-        cta_text = cfg.get("rss_cta_text") or ""
-        if cta_text.strip():
-            prefix = f"{base_text}\n\n"
-            entities = _load_message_entities(cfg.get("rss_cta_entities"), offset_shift=len(prefix))
-            base_text = prefix + cta_text
-
-    if bool(cfg.get("rss_bold_title", False)):
-        entities = apply_bold_title(base_text, entities)
-
-    return base_text, entities
+    return base_text, []
 
 
 async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str, image_url: str | None, temp_file: Path | None = None) -> None:
@@ -2735,44 +2725,14 @@ async def prepare_rss_image_for_sending(bot, cfg: dict, user_id: int, image_url:
             logger.info("[IMG_FALLBACK_ORIGINAL] reason=%s url=%s", vertical_error or "vertical_transform_failed", image_url)
             return image_url, None
         return str(vertical_path), vertical_path
-
-    template_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "template")
-    if not template_rel:
-        if watermark_enabled:
-            fallback_wm_path, fallback_err = _watermark_original_image_with_status(
-                cfg, image_url, watermark_path, mode="rss", branch="no_template_original"
-            )
-            if fallback_wm_path:
-                return str(fallback_wm_path), fallback_wm_path
-            logger.warning("[WM_APPLY_FAIL] branch=no_template_original reason=%s", fallback_err)
-        return image_url, None
-    template_path = BASE_DIR / template_rel
-    if not template_path.exists() or not template_path.is_file():
-        if watermark_enabled:
-            fallback_wm_path, fallback_err = _watermark_original_image_with_status(
-                cfg, image_url, watermark_path, mode="rss", branch="template_missing_original"
-            )
-            if fallback_wm_path:
-                return str(fallback_wm_path), fallback_wm_path
-            logger.warning("[WM_APPLY_FAIL] branch=template_missing_original reason=%s", fallback_err)
-        return image_url, None
-
-    logger.info("[WM_BRANCH] branch=template_compose")
-    composed_path, compose_error = _compose_rss_image_with_status(template_path, image_url, watermark_path, cfg=cfg)
-    if not composed_path:
-        if watermark_enabled:
-            fallback_wm_path, fallback_err = _watermark_original_image_with_status(
-                cfg, image_url, watermark_path, mode="rss", branch="template_compose_fallback_original"
-            )
-            if fallback_wm_path:
-                return str(fallback_wm_path), fallback_wm_path
-            logger.warning("[WM_APPLY_FAIL] branch=template_compose_fallback_original reason=%s", fallback_err)
-        if compose_error == "compose_unsuitable_background":
-            logger.info("[COMPOSE_REJECT_BACKGROUND] branch=prepare_send reason=compose_unsuitable_background")
-            logger.info("[COMPOSE_USE_ORIGINAL] branch=prepare_send reason=compose_unsuitable_background")
-        logger.info("[IMG_FALLBACK_ORIGINAL] reason=%s url=%s", compose_error or "template_compose_failed", image_url)
-        return image_url, None
-    return str(composed_path), composed_path
+    if watermark_enabled:
+        fallback_wm_path, fallback_err = _watermark_original_image_with_status(
+            cfg, image_url, watermark_path, mode="rss", branch="rss_original_only"
+        )
+        if fallback_wm_path:
+            return str(fallback_wm_path), fallback_wm_path
+        logger.warning("[WM_APPLY_FAIL] branch=rss_original_only reason=%s", fallback_err)
+    return image_url, None
 
 
 async def prepare_rss_preview_image_for_sending(bot, cfg: dict, user_id: int, image_url: str | None) -> tuple[str | None, Path | None, str | None]:
@@ -2808,54 +2768,14 @@ async def prepare_rss_preview_image_for_sending(bot, cfg: dict, user_id: int, im
             logger.info("[IMG_FALLBACK_ORIGINAL] reason=%s url=%s", vertical_error or "vertical_transform_failed", image_url)
             return image_url, None, "preview_status_template_build_failed_normal"
         return str(vertical_path), vertical_path, None
-
-    template_rel = await _ensure_asset_path(bot, cfg, user_id, "rss", "template")
-    if not template_rel:
-        if cfg.get("rss_template_file_id"):
-            logger.info("RSS preview template download failed for user %s", user_id)
-            return image_url, None, "preview_status_asset_load_failed_normal"
-        if watermark_enabled:
-            fallback_wm_path, fallback_err = _watermark_original_image_with_status(
-                cfg, image_url, watermark_path, mode="rss", branch="preview_no_template_original"
-            )
-            if fallback_wm_path:
-                return str(fallback_wm_path), fallback_wm_path, None
-            logger.warning("[WM_APPLY_FAIL] branch=preview_no_template_original reason=%s", fallback_err)
-        return image_url, None, None
-
-    template_path = BASE_DIR / template_rel
-    if not template_path.exists() or not template_path.is_file():
-        logger.info("RSS preview template file missing for user %s: %s", user_id, template_path)
-        if watermark_enabled:
-            fallback_wm_path, fallback_err = _watermark_original_image_with_status(
-                cfg, image_url, watermark_path, mode="rss", branch="preview_template_missing_original"
-            )
-            if fallback_wm_path:
-                return str(fallback_wm_path), fallback_wm_path, None
-            logger.warning("[WM_APPLY_FAIL] branch=preview_template_missing_original reason=%s", fallback_err)
-        return image_url, None, "preview_status_asset_load_failed_normal"
-
-    logger.info("[WM_BRANCH] branch=template_compose")
-    composed_path, compose_error = _compose_rss_image_with_status(template_path, image_url, watermark_path, cfg=cfg)
-    if not composed_path:
-        if watermark_enabled:
-            fallback_wm_path, fallback_err = _watermark_original_image_with_status(
-                cfg, image_url, watermark_path, mode="rss", branch="preview_template_compose_fallback_original"
-            )
-            if fallback_wm_path:
-                return str(fallback_wm_path), fallback_wm_path, None
-            logger.warning("[WM_APPLY_FAIL] branch=preview_template_compose_fallback_original reason=%s", fallback_err)
-        if compose_error in {"rss_image_unusable", "rss_image_rejected", "compose_unsuitable_background"}:
-            if compose_error == "compose_unsuitable_background":
-                logger.info("[COMPOSE_REJECT_BACKGROUND] branch=prepare_preview reason=compose_unsuitable_background")
-                logger.info("[COMPOSE_USE_ORIGINAL] branch=prepare_preview reason=compose_unsuitable_background")
-            logger.info("[IMG_FALLBACK_ORIGINAL] reason=%s url=%s", compose_error, image_url)
-            return image_url, None, "preview_status_template_build_failed_normal"
-        if compose_error in {"template_load_failed", "watermark_apply_failed"}:
-            return image_url, None, "preview_status_asset_load_failed_normal"
-        return image_url, None, "preview_status_template_build_failed_normal"
-
-    return str(composed_path), composed_path, None
+    if watermark_enabled:
+        fallback_wm_path, fallback_err = _watermark_original_image_with_status(
+            cfg, image_url, watermark_path, mode="rss", branch="preview_rss_original_only"
+        )
+        if fallback_wm_path:
+            return str(fallback_wm_path), fallback_wm_path, None
+        logger.warning("[WM_APPLY_FAIL] branch=preview_rss_original_only reason=%s", fallback_err)
+    return image_url, None, None
 
 # ===================== LLM providers =====================
 def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link: str, source_context: str = "", weak_context: bool = False, social_source: bool = False) -> str:
@@ -4739,8 +4659,7 @@ def schedule_mode_menu_text(cfg: dict, mode: str) -> str:
         + "\n"
         + ui_text(cfg, "schedule_timezone").format(timezone=user_timezone_label(cfg))
         + "\n"
-        + ui_text(cfg, "schedule_freshness_current").format(minutes=rss_freshness_minutes(cfg))
-        + "\n\n"
+        + "\n"
         + ui_text(cfg, "schedule_current").format(schedule=schedule_summary_for_mode(cfg, mode))
     )
 
