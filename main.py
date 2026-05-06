@@ -386,6 +386,7 @@ DEFAULT_CLIENT = {
     "creator_profile": "",
     "rss_prompt": "",
     "creative_prompt": "",
+    "name_glossary": {},
 
     "channel": None,
     "channels": [],
@@ -1004,7 +1005,51 @@ def sanitize_llm_post(text: str, cfg: dict, link: str) -> str:
     if not t:
         t = "📌 Коротко: в источнике мало деталей."
 
+    t = _apply_name_glossary(t, cfg)
     return t[:900]
+
+
+def _normalized_glossary_pairs(cfg: dict) -> list[tuple[str, str]]:
+    raw = cfg.get("name_glossary")
+    pairs: list[tuple[str, str]] = []
+    if isinstance(raw, dict):
+        for src, dst in raw.items():
+            src_s = str(src or "").strip()
+            dst_s = str(dst or "").strip()
+            if src_s and dst_s and src_s.lower() != dst_s.lower():
+                pairs.append((src_s, dst_s))
+    elif isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            src_s = str(item.get("source") or item.get("from") or "").strip()
+            dst_s = str(item.get("target") or item.get("to") or "").strip()
+            if src_s and dst_s and src_s.lower() != dst_s.lower():
+                pairs.append((src_s, dst_s))
+    pairs.sort(key=lambda pair: len(pair[0]), reverse=True)
+    return pairs
+
+
+def _apply_name_glossary(text: str, cfg: dict) -> str:
+    out = text or ""
+    for src, dst in _normalized_glossary_pairs(cfg):
+        pattern = re.compile(rf"(?<!\w){re.escape(src)}(?!\w)", flags=re.IGNORECASE | re.UNICODE)
+        out = pattern.sub(dst, out)
+    return out
+
+
+def _name_glossary_prompt_rules(cfg: dict) -> str:
+    pairs = _normalized_glossary_pairs(cfg)
+    if not pairs:
+        return (
+            "Names policy: keep names of people, teams, companies, brands, @usernames, and hashtags exactly as in source; "
+            "if unsure, keep original spelling.\n"
+        )
+    mapped = "; ".join([f"{src} -> {dst}" for src, dst in pairs[:25]])
+    return (
+        "Names policy: preserve factual name spelling and apply the approved mapping below exactly.\n"
+        f"Approved name mapping: {mapped}\n"
+    )
 
 
 def _feed_url(feed_entry) -> str:
@@ -2853,10 +2898,12 @@ def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link
             "Do not pretend to understand media/story context that is not described in text.\n"
         )
 
+    glossary_rules = _name_glossary_prompt_rules(cfg)
     prompt = (
         style_prompt + "\n\n"
         "You are a Telegram editor. Rewrite naturally and clearly for Telegram; avoid robotic wording.\n"
         "Use only facts from the source content below. Do not invent details.\n"
+        f"{glossary_rules}"
         "Do not include source attribution, usernames, raw metadata, or links unless explicitly requested in the prompt/output settings.\n"
         "Return plain Telegram-ready text (no JSON, no code blocks). Preserve requested paragraph spacing and formatting.\n\n"
         f"Title: {title}\n"
@@ -2903,6 +2950,7 @@ def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: st
             "do not infer unseen story/media details.\n"
         )
 
+    glossary_rules = _name_glossary_prompt_rules(cfg)
     user_content = (
         f"Title: {title}\n"
         f"Summary: {summary}\n"
@@ -2910,6 +2958,7 @@ def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: st
         f"{source_block}\n"
         "You are a Telegram editor. Rewrite naturally and clearly for Telegram; avoid robotic wording.\n"
         "Use only facts from the source content. Do not invent details.\n"
+        f"{glossary_rules}"
         "Do not include source attribution, usernames, raw metadata, or links unless explicitly requested in the prompt/output settings.\n"
         "Return plain Telegram-ready text (no JSON, no code blocks). Preserve requested paragraph spacing and formatting."
         f"\n{weak_context_rules}"
