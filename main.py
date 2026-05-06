@@ -1562,6 +1562,32 @@ def _candidate_identity_token(link_n: str, title: str) -> str:
     return fp_title or hashlib.sha1(link_n.encode("utf-8")).hexdigest()[:20]
 
 
+def _is_low_context_social_reply(title: str, summary: str, feed_url: str) -> bool:
+    domain = (urlsplit(feed_url).netloc or "").lower()
+    social_feed = any(x in domain for x in ("twitter.", "x.com", "nitter.", "twiiit.com", "twstalker"))
+    if not social_feed:
+        return False
+
+    title_text = clean_text(title or "")
+    summary_text = clean_text(summary or "")
+    text = f"{title_text}\n{summary_text}".strip()
+    if not text:
+        return True
+
+    lower = text.lower()
+    if re.search(r"\breplying to\b|\bin reply to\b|\bответ[а-я]*\b", lower):
+        return True
+
+    visible_words = re.findall(r"[A-Za-zА-Яа-яЁё0-9#]+", text)
+    mentions = re.findall(r"(?<!\w)@[A-Za-z0-9_]{1,20}", text)
+    has_link = bool(re.search(r"https?://", text))
+    if mentions and len(visible_words) <= 8 and not has_link:
+        return True
+    if title_text.startswith("@") and len(visible_words) <= 10 and not has_link:
+        return True
+    return False
+
+
 def collect_rss_candidates(cfg: dict) -> list[dict]:
     feeds = cfg.get("feeds", [])
     posted = set(cfg.get("posted_urls", []))
@@ -1590,6 +1616,9 @@ def collect_rss_candidates(cfg: dict) -> list[dict]:
             title = getattr(e, "title", "Untitled")
             summary = clean_text(_entry_get(e, "summary", "") or _entry_get(e, "description", "") or "")
             published = getattr(e, "published_parsed", None)
+            if _is_low_context_social_reply(title, summary, feed_url):
+                logger.info("[CANDIDATE_SKIPPED_REPLY_ONLY] feed=%s link=%s", feed_url, link_n)
+                continue
             is_important, _ = classify_candidate_importance(cfg, title, summary)
             if not candidate_is_fresh(cfg, published, now_utc, "initial_scan", is_important=is_important):
                 continue
