@@ -2546,7 +2546,23 @@ def emoji_style_note(cfg: dict, mode: str) -> str:
 
 
 def build_rss_message_payload(cfg: dict, msg: str, link: str) -> tuple[str, list[MessageEntity]]:
-    return msg, []
+    final_text = (msg or "").strip()
+    final_entities: list[MessageEntity] = []
+
+    if bool(cfg.get("rss_bold_title", False)):
+        final_entities = apply_bold_title(final_text, final_entities)
+
+    if bool(cfg.get("rss_cta_enabled", False)):
+        cta_text = str(cfg.get("rss_cta_text") or "").strip()
+        if cta_text:
+            sep = "\n\n" if final_text else ""
+            cta_start = len(final_text + sep)
+            final_text = f"{final_text}{sep}{cta_text}"
+            cta_entities = _load_message_entities(cfg.get("rss_cta_entities"), offset_shift=cta_start)
+            if cta_entities:
+                final_entities.extend(cta_entities)
+
+    return final_text, final_entities
 
 
 async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str, image_url: str | None, temp_file: Path | None = None) -> None:
