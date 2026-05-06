@@ -227,7 +227,7 @@ def build_rss_output_menu(labels: dict, include_source_link: bool, use_feed_imag
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(labels["btn_emoji_management"], callback_data="ui:rss:emoji:menu")],
-            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:rss:menu")],
+            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:backmain")],
         ]
     )
 
