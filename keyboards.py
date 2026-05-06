@@ -83,7 +83,7 @@ def build_creative_menu(labels: dict) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(labels["btn_creative_publish_settings"], callback_data="ui:creative:publish_settings")],
             [InlineKeyboardButton(labels["btn_creative_advanced"], callback_data="ui:creative:advanced")],
             [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:creative:preview")],
-            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:modes")],
+            [InlineKeyboardButton(labels["btn_back_main"], callback_data="ui:backmain")],
         ]
     )
 
@@ -188,7 +188,7 @@ def build_rss_ai_menu(labels: dict, rss_paused: bool = False) -> InlineKeyboardM
                 InlineKeyboardButton(labels["btn_scheduling"], callback_data="ui:schedule:rss:menu"),
             ],
             [InlineKeyboardButton(labels["btn_preview"], callback_data="ui:rss:preview")],
-            [InlineKeyboardButton(labels["btn_back"], callback_data="ui:modes")],
+            [InlineKeyboardButton(labels["btn_back_main"], callback_data="ui:backmain")],
         ]
     )
 
