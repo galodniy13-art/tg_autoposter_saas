@@ -3637,11 +3637,13 @@ def build_main_menu_clean(cfg: dict) -> InlineKeyboardMarkup:
     return build_main_menu_minimal(ui_pack(cfg))
 
 
-def build_help_text(cfg: dict) -> str:
+def build_help_text(cfg: dict, username: str = "") -> str:
+    handle = (username or "").strip().lstrip("@")
+    contact_line = ui_text(cfg, "help_contact_named").format(username=f"@{handle}") if handle else ui_text(cfg, "help_contact")
     return (
         f"{ui_text(cfg, 'help_open_link')}\n"
         f"{ui_text(cfg, 'help_link')}\n\n"
-        f"{ui_text(cfg, 'help_contact')}"
+        f"{contact_line}"
     )
 
 
@@ -5349,7 +5351,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(ui_text(cfg, "choose_lang"), reply_markup=build_lang_menu())
         return
 
-    await send_menu(update, cfg, build_help_text(cfg))
+    await send_menu(update, cfg, build_help_text(cfg, (update.effective_user.username if update.effective_user else "")))
 
 from telegram.error import BadRequest
 from telegram import Update
@@ -7833,7 +7835,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:help":
-        await send_menu(update, cfg, build_help_text(cfg))
+        await send_menu(update, cfg, build_help_text(cfg, (update.effective_user.username if update.effective_user else "")))
         return
 
     if data == "ui:pay":

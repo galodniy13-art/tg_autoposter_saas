@@ -9,12 +9,7 @@ TEXTS = {
             "• 5 posts/day — $3/month\n"
             "• 10 posts/day — $5/month\n"
             "• 20 posts/day — $8/month\n• 40 posts/day — $12/month\n\n"
-            "Creative mode (account-wide monthly post pool shared across all your channels):\n"
-            "• 30 posts/month — $5/month\n"
-            "• 60 posts/month — $8/month\n"
-            "• 100 posts/month — $13/month\n• 200 posts/month — $20/month\n\n"
             "Channel slots are purchased separately (how many channels you can connect).\n"
-            "You can combine RSS + Creative access.\n"
             "To activate, message: @a_karaglan, @a_karaglanov\n\n"
             "🔻 Discount for upfront payment\n\n"
             "• 3 months — −10%\n"
@@ -183,6 +178,7 @@ TEXTS = {
         "help_link": "https://telegra.ph/Instructions-on-how-to-use-the-bot-and-additional-materials-02-27",
         "help_open_link": "Open this link:",
         "help_contact": "If something is unclear, contact me.",
+        "help_contact_named": "If something is unclear, text me at {username}.",
         "btn_status": "ℹ️ Status",
         "btn_channel_management": "📺 Channel Management",
         "btn_add_channel": "➕ Add Channel",
@@ -619,12 +615,7 @@ TEXTS = {
             "• 5 постов/день — $3/месяц\n"
             "• 10 постов/день — $5/месяц\n"
             "• 20 постов/день — $8/месяц\n• 40 постов/день — $12/месяц\n\n"
-            "Creative-режим (месячный пул постов на аккаунт, общий для всех каналов):\n"
-            "• 30 постов/месяц — $5/месяц\n"
-            "• 60 постов/месяц — $8/месяц\n"
-            "• 100 постов/месяц — $13/месяц\n• 200 постов/месяц — $20/месяц\n\n"
             "Слоты каналов покупаются отдельно (сколько каналов можно подключить).\n"
-            "Можно комбинировать RSS + Creative доступ.\n"
             "Для активации напишите: @a_karaglan, @a_karaglanov\n\n"
             "🔻 Скидка при оплате сразу\n\n"
             "• 3 месяца — −10%\n"
@@ -793,6 +784,7 @@ TEXTS = {
         "help_link": "https://telegra.ph/Instrukciya-po-polzovaniyu-botom-i-poleznye-materialy-02-27",
         "help_open_link": "Откройте эту ссылку:",
         "help_contact": "Если что-то непонятно, напишите мне.",
+        "help_contact_named": "Если что-то непонятно, напишите мне: {username}.",
         "btn_status": "ℹ️ Статус",
         "btn_channel_management": "📺 Управление каналом",
         "btn_add_channel": "➕ Добавить канал",
