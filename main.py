@@ -942,14 +942,56 @@ def style_setup_text(user_id: int, cfg: dict, mode: str) -> str:
         preview = ui_text(cfg, "style_setup_empty")
     return f"{ui_text(cfg, 'style_setup_title')}\n\n{preview}"
 
+
+
+def _normalized_line_signature(text: str) -> str:
+    cleaned = clean_text(text).lower()
+    cleaned = re.sub(r"https?://\S+", "", cleaned)
+    cleaned = re.sub(r"@\w+", "", cleaned)
+    cleaned = re.sub(r"[^\w\s]", " ", cleaned, flags=re.UNICODE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _dedupe_repetitive_paragraphs(text: str) -> str:
+    paragraphs = [chunk.strip() for chunk in re.split(r"\n\s*\n", text or "") if chunk.strip()]
+    if len(paragraphs) < 2:
+        return (text or "").strip()
+
+    unique: list[str] = []
+    seen_signatures: list[str] = []
+    for paragraph in paragraphs:
+        signature = _normalized_line_signature(paragraph)
+        if not signature:
+            continue
+
+        duplicate = False
+        for existing in seen_signatures:
+            if signature == existing:
+                duplicate = True
+                break
+            overlap = _story_similarity(signature, existing)
+            if overlap >= 0.88:
+                duplicate = True
+                break
+        if duplicate:
+            continue
+
+        unique.append(paragraph)
+        seen_signatures.append(signature)
+
+    if not unique:
+        return ""
+    return "\n\n".join(unique)
+
 def sanitize_llm_post(text: str, cfg: dict, link: str) -> str:
     t = (text or "").replace("\r", "").strip()
 
     # trim common wrapper formatting
     t = re.sub(r"(?is)^```[a-z0-9_\-]*\s*", "", t).strip()
     t = re.sub(r"(?is)\s*```$", "", t).strip()
-    t = re.sub(r"\*\*(.+?)\*\*", r"\1", t)
     t = re.sub(r"\n{3,}", "\n\n", t).strip()
+    t = _dedupe_repetitive_paragraphs(t)
 
     include_source_link = bool(cfg.get("include_rss_source_link", True))
     if not include_source_link:
