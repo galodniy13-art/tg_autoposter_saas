@@ -5518,13 +5518,28 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         data = route_data
 
     if data == "ui:setup":
-        logger.info("[NAV_ENTER] screen=setup")
-        clear_mode_channel_selection(context)
+        if not await enforce_mode_paywall(update, cfg, "rss"):
+            return
+        selected, state = require_channel_context(cfg, context, "rss_menu")
+        if state == "empty":
+            await q.answer()
+            await q.message.reply_text(ui_text(cfg, "channel_picker_empty"))
+            return
+        if state == "pick":
+            clear_mode_channel_selection(context)
+            await q.answer()
+            await q.message.reply_text(
+                ui_text(cfg, "channel_picker_title"),
+                reply_markup=build_channel_picker(cfg, "rss_menu", "ui:backmain"),
+            )
+            return
+        logger.info("[NAV_ENTER] screen=rss_menu channel=%s", selected)
         await q.answer()
+        text = rss_menu_text(user_id, cfg, selected)
         try:
-            await q.edit_message_text(text=ui_text(cfg, "setup_menu_title"), reply_markup=build_setup_menu(cfg))
+            await q.edit_message_text(text=text, reply_markup=build_rss_submenu(cfg))
         except BadRequest:
-            await q.message.reply_text(text=ui_text(cfg, "setup_menu_title"), reply_markup=build_setup_menu(cfg))
+            await q.message.reply_text(text=text, reply_markup=build_rss_submenu(cfg))
         return
 
     if data == "ui:setup:channels":

@@ -20,6 +20,7 @@ def build_main_menu_minimal(labels: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(labels["btn_setup"], callback_data="ui:setup")],
+            [InlineKeyboardButton(labels["btn_channel_management"], callback_data="ui:setup:channels")],
             [InlineKeyboardButton(labels["btn_payment"], callback_data="ui:pay")],
             [InlineKeyboardButton(labels["btn_help"], callback_data="ui:help")],
             [InlineKeyboardButton(labels["btn_status"], callback_data="ui:status")],
@@ -68,7 +69,6 @@ def build_modes_menu(labels: dict) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(labels["mode_rss_ai"], callback_data="ui:mode:rss:menu")],
-            [InlineKeyboardButton(labels["mode_creative"], callback_data="ui:mode:creative:menu")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:setup")],
         ]
     )
