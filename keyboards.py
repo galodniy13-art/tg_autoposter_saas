@@ -224,17 +224,9 @@ def build_style_setup_menu(labels: dict, mode: str, back_callback: str) -> Inlin
 
 
 def build_rss_output_menu(labels: dict, include_source_link: bool, use_feed_image: bool, cta_enabled: bool, bold_title_enabled: bool) -> InlineKeyboardMarkup:
-    source_label = labels["btn_source_link_on"] if include_source_link else labels["btn_source_link_off"]
-    image_label = labels["btn_feed_image_on"] if use_feed_image else labels["btn_feed_image_off"]
     return InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton(source_label, callback_data="ui:rss:toggle_source_link"),
-                InlineKeyboardButton(image_label, callback_data="ui:rss:toggle_feed_image"),
-            ],
-            [
-                InlineKeyboardButton(labels["btn_emoji_management"], callback_data="ui:rss:emoji:menu"),
-            ],
+            [InlineKeyboardButton(labels["btn_emoji_management"], callback_data="ui:rss:emoji:menu")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:mode:rss:menu")],
         ]
     )

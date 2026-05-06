@@ -397,7 +397,7 @@ DEFAULT_CLIENT = {
     "posted_urls": [],
     "posted_story_fingerprints": [],
     "posted_item_meta": [],
-    "include_rss_source_link": True,
+    "include_rss_source_link": False,
     "use_rss_feed_image": True,
     "rss_cta_enabled": False,
     "rss_cta_text": "",
@@ -2430,11 +2430,7 @@ def emoji_style_note(cfg: dict, mode: str) -> str:
 
 
 def build_rss_message_payload(cfg: dict, msg: str, link: str) -> tuple[str, list[MessageEntity]]:
-    base_text = msg
-    if bool(cfg.get("include_rss_source_link", True)):
-        base_text = f"{base_text}\n\n{link}"
-
-    return base_text, []
+    return msg, []
 
 
 async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str, image_url: str | None, temp_file: Path | None = None) -> None:
@@ -2443,44 +2439,32 @@ async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str,
     if temp_file:
         used_temp_files.append(temp_file)
     try:
-        if bool(cfg.get("use_rss_feed_image", True)) and image_url:
-            caption = final_text
-            photo_candidates: list[Path | str] = []
-            photo_candidates.append(temp_file if temp_file else image_url)
-            if not temp_file:
-                fallback_file, _ = _download_image_to_tempfile(image_url, marker="send_fallback_upload")
-                if fallback_file:
-                    photo_candidates.append(fallback_file)
-                    used_temp_files.append(fallback_file)
+        if not image_url and not temp_file:
+            raise RuntimeError("RSS image is required, but no image was prepared")
+        caption = final_text
+        photo_candidates: list[Path | str] = []
+        if temp_file:
+            photo_candidates.append(temp_file)
+        elif image_url:
+            photo_candidates.append(image_url)
+        if image_url and not temp_file:
+            fallback_file, _ = _download_image_to_tempfile(image_url, marker="send_fallback_upload")
+            if fallback_file:
+                photo_candidates.append(fallback_file)
+                used_temp_files.append(fallback_file)
 
-            for idx, photo_input in enumerate(photo_candidates):
-                try:
-                    logger.info("[TG_SEND_PHOTO] attempt=%s input_type=%s", idx + 1, type(photo_input).__name__)
-                    if len(caption) > 1024:
-                        caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in final_entities], max_offset=1024)
-                        await bot.send_photo(chat_id=channel, photo=photo_input, caption=caption[:1024], caption_entities=caption_entities or None)
-                        if len(final_text) > 1024:
-                            remainder_entities = _load_message_entities(
-                                [_message_entity_to_dict(e) for e in final_entities],
-                                min_offset=1024,
-                            )
-                            await bot.send_message(
-                                chat_id=channel,
-                                text=final_text[1024:],
-                                entities=remainder_entities or None,
-                                disable_web_page_preview=False,
-                            )
-                        logger.info("[IMG_PIPELINE_RESULT] stage=telegram_send result=photo")
-                        return
-                    await bot.send_photo(chat_id=channel, photo=photo_input, caption=caption, caption_entities=final_entities or None)
-                    logger.info("[IMG_PIPELINE_RESULT] stage=telegram_send result=photo")
-                    return
-                except Exception as exc:
-                    logger.warning("[IMG_DOWNLOAD_FAIL] marker=tg_send_photo_attempt reason=%s", exc)
-
-            logger.info("[TG_SEND_TEXT_ONLY] reason=photo_send_failed")
-        await bot.send_message(chat_id=channel, text=final_text, entities=final_entities or None, disable_web_page_preview=False)
-        logger.info("[IMG_PIPELINE_RESULT] stage=telegram_send result=text_only")
+        last_exc: Exception | None = None
+        for idx, photo_input in enumerate(photo_candidates):
+            try:
+                logger.info("[TG_SEND_PHOTO] attempt=%s input_type=%s", idx + 1, type(photo_input).__name__)
+                caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in final_entities], max_offset=1024)
+                await bot.send_photo(chat_id=channel, photo=photo_input, caption=caption[:1024], caption_entities=caption_entities or None)
+                logger.info("[IMG_PIPELINE_RESULT] stage=telegram_send result=photo")
+                return
+            except Exception as exc:
+                last_exc = exc
+                logger.warning("[IMG_DOWNLOAD_FAIL] marker=tg_send_photo_attempt reason=%s", exc)
+        raise RuntimeError(f"Failed to send RSS photo: {last_exc}")
     finally:
         for path in used_temp_files:
             try:
@@ -4734,7 +4718,7 @@ async def rss_preview_text(bot, user_id: int, cfg: dict) -> tuple[str, str | Non
     _, title, link, src = best
     summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
     msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
-    image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
+    image_url = extract_image_url_for_link(src, link)
     text, entities = build_rss_message_payload(cfg, msg, link)
     preview_prefix = "🧪 Preview:\n\n"
     preview_entities = _load_message_entities([_message_entity_to_dict(e) for e in entities], offset_shift=len(preview_prefix))
@@ -6406,7 +6390,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                     return
                 _, title, link, src = best
                 summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
-                image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
+                image_url = extract_image_url_for_link(src, link)
             except Exception:
                 logger.exception("preview rss stage failed for user %s", user_id)
                 await q.message.reply_text(
@@ -6833,7 +6817,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:rss:toggle_source_link":
-        cfg["include_rss_source_link"] = not bool(cfg.get("include_rss_source_link", True))
+        cfg["include_rss_source_link"] = False
         save_client(user_id, cfg)
         await q.answer()
         text = output_settings_text(cfg, "rss")
@@ -6844,7 +6828,7 @@ async def ui_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if data == "ui:rss:toggle_feed_image":
-        cfg["use_rss_feed_image"] = not bool(cfg.get("use_rss_feed_image", True))
+        cfg["use_rss_feed_image"] = True
         save_client(user_id, cfg)
         await q.answer()
         text = output_settings_text(cfg, "rss")
@@ -8826,7 +8810,7 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             published, title, link, src = best
             summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
             msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
-            image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
+            image_url = extract_image_url_for_link(src, link)
             send_image_url, temp_file = await prepare_rss_image_for_sending(context.bot, cfg, user_id, image_url)
             await send_rss_to_channel(context.bot, cfg, channel, msg, link, send_image_url, temp_file)
             _record_posted_rss_item(cfg, link, title, src, published)
@@ -8855,7 +8839,7 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     published, title, link, src = best
     summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
     msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
-    image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
+    image_url = extract_image_url_for_link(src, link)
     send_image_url, temp_file = await prepare_rss_image_for_sending(context.bot, cfg, user_id, image_url)
 
     await send_rss_to_channel(context.bot, cfg, channel, msg, link, send_image_url, temp_file)
@@ -9313,7 +9297,7 @@ async def autopost_loop(app: Application) -> None:
                     published, title, link, src = candidate["published"], candidate["title"], candidate["link"], candidate["feed_url"]
                     summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
                     msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
-                    image_url = extract_image_url_for_link(src, link) if bool(cfg.get("use_rss_feed_image", True)) else None
+                    image_url = extract_image_url_for_link(src, link)
                     send_image_url, temp_file = await prepare_rss_image_for_sending(app.bot, cfg, user_id, image_url)
 
                     await send_rss_to_channel(app.bot, cfg, channel, msg, link, send_image_url, temp_file)
