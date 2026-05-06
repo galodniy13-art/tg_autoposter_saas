@@ -148,6 +148,7 @@ DEFAULT_STYLE_FILE = "default_ru.txt"
 CREATIVE_POST_TYPES = ["educational", "opinion", "story", "checklist", "question", "myth_vs_fact", "mini_case"]
 CREATIVE_VARIATION_LEVELS = {"low", "balanced", "high"}
 logger = logging.getLogger(__name__)
+_RECENT_CHANNEL_PAYLOADS: dict[tuple[str, str], datetime] = {}
 
 # ===================== Texts (EN/RU) =====================
 TEXTS = {
@@ -991,6 +992,8 @@ def sanitize_llm_post(text: str, cfg: dict, link: str) -> str:
     # trim common wrapper formatting
     t = re.sub(r"(?is)^```[a-z0-9_\-]*\s*", "", t).strip()
     t = re.sub(r"(?is)\s*```$", "", t).strip()
+    t = re.sub(r"\*\*(.*?)\*\*", r"\1", t)
+    t = re.sub(r"__(.*?)__", r"\1", t)
     t = re.sub(r"\n{3,}", "\n\n", t).strip()
     t = _dedupe_repetitive_paragraphs(t)
 
@@ -2567,6 +2570,13 @@ def build_rss_message_payload(cfg: dict, msg: str, link: str) -> tuple[str, list
 
 async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str, image_url: str | None, temp_file: Path | None = None) -> None:
     final_text, final_entities = build_rss_message_payload(cfg, msg, link)
+    dedupe_key = (str(channel), hashlib.sha1(final_text.encode("utf-8", errors="ignore")).hexdigest())
+    now_utc = datetime.now(timezone.utc)
+    prev_sent = _RECENT_CHANNEL_PAYLOADS.get(dedupe_key)
+    if prev_sent and (now_utc - prev_sent) <= timedelta(minutes=10):
+        logger.info("[SEND_SKIP_DUPLICATE] channel=%s age_seconds=%.1f", channel, (now_utc - prev_sent).total_seconds())
+        return
+
     used_temp_files: list[Path] = []
     if temp_file:
         used_temp_files.append(temp_file)
@@ -2591,6 +2601,7 @@ async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str,
                 logger.info("[TG_SEND_PHOTO] attempt=%s input_type=%s", idx + 1, type(photo_input).__name__)
                 caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in final_entities], max_offset=1024)
                 await bot.send_photo(chat_id=channel, photo=photo_input, caption=caption[:1024], caption_entities=caption_entities or None)
+                _RECENT_CHANNEL_PAYLOADS[dedupe_key] = now_utc
                 logger.info("[IMG_PIPELINE_RESULT] stage=telegram_send result=photo")
                 return
             except Exception as exc:
