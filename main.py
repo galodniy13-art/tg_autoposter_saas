@@ -149,6 +149,7 @@ CREATIVE_POST_TYPES = ["educational", "opinion", "story", "checklist", "question
 CREATIVE_VARIATION_LEVELS = {"low", "balanced", "high"}
 logger = logging.getLogger(__name__)
 _RECENT_CHANNEL_PAYLOADS: dict[tuple[str, str], datetime] = {}
+_RECENT_CHANNEL_TEXTS: dict[str, list[tuple[datetime, str]]] = {}
 _AUTOPOST_LOOP_TASK: asyncio.Task | None = None
 
 # ===================== Texts (EN/RU) =====================
@@ -2569,6 +2570,20 @@ def build_rss_message_payload(cfg: dict, msg: str, link: str) -> tuple[str, list
     return final_text, final_entities
 
 
+def _normalize_text_for_similarity(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", (text or "").strip().lower())
+    normalized = re.sub(r"[^\w\s]", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _token_jaccard(a: str, b: str) -> float:
+    a_tokens = {t for t in _normalize_text_for_similarity(a).split() if len(t) > 2}
+    b_tokens = {t for t in _normalize_text_for_similarity(b).split() if len(t) > 2}
+    if not a_tokens or not b_tokens:
+        return 0.0
+    return len(a_tokens & b_tokens) / max(1, len(a_tokens | b_tokens))
+
+
 async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str, image_url: str | None, temp_file: Path | None = None) -> None:
     final_text, final_entities = build_rss_message_payload(cfg, msg, link)
     dedupe_key = (str(channel), hashlib.sha1(final_text.encode("utf-8", errors="ignore")).hexdigest())
@@ -2577,6 +2592,20 @@ async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str,
     if prev_sent and (now_utc - prev_sent) <= timedelta(minutes=10):
         logger.info("[SEND_SKIP_DUPLICATE] channel=%s age_seconds=%.1f", channel, (now_utc - prev_sent).total_seconds())
         return
+    history = _RECENT_CHANNEL_TEXTS.get(str(channel), [])
+    cutoff = now_utc - timedelta(hours=3)
+    history = [(ts, text) for ts, text in history if ts >= cutoff]
+    for ts, prev_text in history:
+        similarity = _token_jaccard(final_text, prev_text)
+        if similarity >= 0.82:
+            logger.info(
+                "[SEND_SKIP_NEAR_DUPLICATE] channel=%s age_seconds=%.1f similarity=%.3f",
+                channel,
+                (now_utc - ts).total_seconds(),
+                similarity,
+            )
+            _RECENT_CHANNEL_TEXTS[str(channel)] = history
+            return
 
     used_temp_files: list[Path] = []
     if temp_file:
@@ -2603,6 +2632,8 @@ async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str,
                 caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in final_entities], max_offset=1024)
                 await bot.send_photo(chat_id=channel, photo=photo_input, caption=caption[:1024], caption_entities=caption_entities or None)
                 _RECENT_CHANNEL_PAYLOADS[dedupe_key] = now_utc
+                history.append((now_utc, final_text))
+                _RECENT_CHANNEL_TEXTS[str(channel)] = history[-30:]
                 logger.info("[IMG_PIPELINE_RESULT] stage=telegram_send result=photo")
                 return
             except Exception as exc:
