@@ -149,6 +149,7 @@ CREATIVE_POST_TYPES = ["educational", "opinion", "story", "checklist", "question
 CREATIVE_VARIATION_LEVELS = {"low", "balanced", "high"}
 logger = logging.getLogger(__name__)
 _RECENT_CHANNEL_PAYLOADS: dict[tuple[str, str], datetime] = {}
+_AUTOPOST_LOOP_TASK: asyncio.Task | None = None
 
 # ===================== Texts (EN/RU) =====================
 TEXTS = {
@@ -9499,6 +9500,7 @@ def start_health_server() -> None:
     HTTPServer(("0.0.0.0", port), Handler).serve_forever()
 
 async def on_startup(app: Application) -> None:
+    global _AUTOPOST_LOOP_TASK
     ensure_dirs()
 
     default_style = STYLES_DIR / DEFAULT_STYLE_FILE
@@ -9539,8 +9541,11 @@ async def on_startup(app: Application) -> None:
         if changed:
             save_client(user_id, cfg)
 
-    # Start background task
-    asyncio.create_task(autopost_loop(app))
+    # Start a single background task. post_init may run more than once during lifecycle events.
+    if _AUTOPOST_LOOP_TASK and not _AUTOPOST_LOOP_TASK.done():
+        logger.info("[autopost] loop already running; skipping duplicate startup")
+    else:
+        _AUTOPOST_LOOP_TASK = asyncio.create_task(autopost_loop(app))
 
 def main() -> None:
     ensure_dirs()
