@@ -1599,6 +1599,26 @@ def _record_posted_rss_item(cfg: dict, link: str, title: str, feed_url: str, pub
     cfg["posted_story_fingerprints"] = [x.get("fingerprint") for x in cfg["posted_item_meta"] if isinstance(x, dict) and x.get("fingerprint")]
 
 
+
+
+def _is_story_already_posted(cfg: dict, link: str, title: str) -> bool:
+    normalized_link = normalize_url(link)
+    posted_links = {normalize_url(str(x)) for x in cfg.get("posted_urls", []) if isinstance(x, str)}
+    if normalized_link in posted_links:
+        return True
+
+    title_fp = _story_title_fingerprint(title)
+    for item in _pruned_posted_meta(cfg):
+        if not isinstance(item, dict):
+            continue
+        posted_fp = str(item.get("fingerprint") or "")
+        posted_title = str(item.get("title") or "")
+        if title_fp and posted_fp and title_fp == posted_fp:
+            return True
+        if posted_title and _story_similarity(posted_title, title) >= 0.90:
+            return True
+    return False
+
 def pick_newest_unseen(cfg: dict):
     candidates = collect_rss_candidates(cfg)
     if not candidates:
@@ -2958,10 +2978,12 @@ def ollama_generate_post(user_id: int, cfg: dict, title: str, summary: str, link
         )
 
     glossary_rules = _name_glossary_prompt_rules(cfg)
+    requested_language = "Russian" if (cfg.get("language") or "en").lower() == "ru" else "English"
     prompt = (
         style_prompt + "\n\n"
         "You are a Telegram editor. Rewrite naturally and clearly for Telegram; avoid robotic wording.\n"
         "Use only facts from the source content below. Do not invent details.\n"
+        f"Output language: {requested_language}. Always answer fully in this language.\n"
         f"{glossary_rules}"
         "Do not include source attribution, usernames, raw metadata, or links unless explicitly requested in the prompt/output settings.\n"
         "Return plain Telegram-ready text (no JSON, no code blocks). Preserve requested paragraph spacing and formatting.\n\n"
@@ -3010,6 +3032,7 @@ def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: st
         )
 
     glossary_rules = _name_glossary_prompt_rules(cfg)
+    requested_language = "Russian" if (cfg.get("language") or "en").lower() == "ru" else "English"
     user_content = (
         f"Title: {title}\n"
         f"Summary: {summary}\n"
@@ -3017,6 +3040,7 @@ def openai_compat_generate_post(user_id: int, cfg: dict, title: str, summary: st
         f"{source_block}\n"
         "You are a Telegram editor. Rewrite naturally and clearly for Telegram; avoid robotic wording.\n"
         "Use only facts from the source content. Do not invent details.\n"
+        f"Output language: {requested_language}. Always answer fully in this language.\n"
         f"{glossary_rules}"
         "Do not include source attribution, usernames, raw metadata, or links unless explicitly requested in the prompt/output settings.\n"
         "Return plain Telegram-ready text (no JSON, no code blocks). Preserve requested paragraph spacing and formatting."
@@ -9491,6 +9515,11 @@ async def autopost_loop(app: Application) -> None:
                         continue
 
                     published, title, link, src = candidate["published"], candidate["title"], candidate["link"], candidate["feed_url"]
+                    latest_cfg = load_client(user_id)
+                    switch_active_channel(latest_cfg, channel)
+                    if _is_story_already_posted(latest_cfg, link, title):
+                        logger.info("[CANDIDATE_SKIP_ALREADY_POSTED_RACE] channel=%s link=%s", channel, link)
+                        continue
                     summary, source_context, weak_context, social_source = build_rss_generation_input(src, link, title)
                     msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
                     image_url = extract_image_url_for_link(src, link)
