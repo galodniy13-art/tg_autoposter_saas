@@ -226,6 +226,7 @@ def build_style_setup_menu(labels: dict, mode: str, back_callback: str) -> Inlin
 def build_rss_output_menu(labels: dict, include_source_link: bool, use_feed_image: bool, cta_enabled: bool, bold_title_enabled: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton(labels["btn_edit_watermark"], callback_data="ui:rss:asset:watermark")],
             [InlineKeyboardButton(labels["btn_emoji_management"], callback_data="ui:rss:emoji:menu")],
             [InlineKeyboardButton(labels["btn_back"], callback_data="ui:backmain")],
         ]
