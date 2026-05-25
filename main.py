@@ -395,7 +395,7 @@ DEFAULT_CLIENT = {
     "channels": [],
     "channel_labels": {},
     "channel_meta": {},
-    "channel_slots": 0,
+    "channel_slots": 5,
     "feed_limit_per_channel": 2,
     "feeds": [],
     "posted_urls": [],
@@ -9196,6 +9196,27 @@ async def autopostoff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await reply_ui(update, notice, cfg, show_menu=True)
 
 # ===================== Admin commands =====================
+
+
+async def admincommands_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    caller = update.effective_user.id
+    if not is_admin(caller):
+        await update.message.reply_text(tr(load_client(caller), "admin_only"))
+        return
+
+    await update.message.reply_text(
+        "🛠 Admin commands:\n"
+        "/setrss <user_id> <posts_per_day> [days]\n"
+        "/setcreative <user_id> <posts_per_month> [days]\n"
+        "/activate <user_id> <days>\n"
+        "/deactivate <user_id>\n"
+        "/setlimit <user_id> <limit>\n"
+        "/setchannels <user_id> <count> [days]  ← set exact channel slots (1, 2, 5, etc.)\n"
+        "/setfeedlimit <user_id> <count>\n"
+        "/setinterval <user_id> <minutes>\n\n"
+        "Default for new users: 5 channel slots."
+    )
+
 async def setrss_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     caller = update.effective_user.id
     if not is_admin(caller):
@@ -9733,6 +9754,7 @@ def main() -> None:
     app.add_handler(CommandHandler("autopostoff", autopostoff_cmd))
 
     # admin
+    app.add_handler(CommandHandler("admincommands", admincommands_cmd))
     app.add_handler(CommandHandler("setrss", setrss_cmd))
     app.add_handler(CommandHandler("setcreative", setcreative_cmd))
     app.add_handler(CommandHandler("activate", activate_cmd))
