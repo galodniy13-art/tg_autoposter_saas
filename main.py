@@ -2495,6 +2495,57 @@ def extract_image_url_for_link(feed_url: str, link_normalized: str, limit: int =
     return None
 
 
+def extract_video_url_for_link(feed_url: str, link_normalized: str, limit: int = 20) -> str | None:
+    logger.info("[VIDEO_EXTRACT_START] feed=%s link=%s", feed_url, link_normalized)
+    fp = feedparser.parse(feed_url)
+    entries = getattr(fp, "entries", []) or []
+    for e in entries[:limit]:
+        link = _entry_primary_link(e)
+        if not link or normalize_url(link) != link_normalized:
+            continue
+
+        def _take_video_url(url: str, mime_type: str = "", base_url: str = "") -> str | None:
+            normalized = _normalize_image_url(url, base_url)
+            if not normalized:
+                return None
+            mt = (mime_type or "").lower()
+            if "video" in mt or re.search(r"(?i)\.(mp4|m4v|mov|webm)(?:$|[?#])", normalized):
+                return normalized
+            return None
+
+        media_content = _entry_get(e, "media_content", []) or []
+        for item in media_content:
+            if not isinstance(item, dict):
+                continue
+            candidate = _take_video_url(item.get("url") or "", item.get("type") or "", link)
+            if candidate:
+                logger.info("[VIDEO_FOUND_MEDIA_CONTENT] url=%s", candidate)
+                return candidate
+
+        enclosure = _entry_get(e, "enclosure", {}) or {}
+        if isinstance(enclosure, dict):
+            candidate = _take_video_url(
+                enclosure.get("href") or enclosure.get("url") or "",
+                enclosure.get("type") or "",
+                link,
+            )
+            if candidate:
+                logger.info("[VIDEO_FOUND_ENCLOSURE] url=%s", candidate)
+                return candidate
+
+        enclosures = _entry_get(e, "enclosures", []) or []
+        for item in enclosures:
+            if not isinstance(item, dict):
+                continue
+            candidate = _take_video_url(item.get("url") or "", item.get("type") or "", link)
+            if candidate:
+                logger.info("[VIDEO_FOUND_ENCLOSURES] url=%s", candidate)
+                return candidate
+        break
+    logger.info("[VIDEO_PIPELINE_RESULT] stage=extract result=no_video")
+    return None
+
+
 def format_rss_message(cfg: dict, msg: str, link: str) -> str:
     return build_rss_message_payload(cfg, msg, link)[0]
 
@@ -2604,7 +2655,16 @@ def _token_jaccard(a: str, b: str) -> float:
     return len(a_tokens & b_tokens) / max(1, len(a_tokens | b_tokens))
 
 
-async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str, image_url: str | None, temp_file: Path | None = None) -> None:
+async def send_rss_to_channel(
+    bot,
+    cfg: dict,
+    channel: str,
+    msg: str,
+    link: str,
+    image_url: str | None,
+    temp_file: Path | None = None,
+    video_url: str | None = None,
+) -> None:
     final_text, final_entities = build_rss_message_payload(cfg, msg, link)
     dedupe_key = (str(channel), hashlib.sha1(final_text.encode("utf-8", errors="ignore")).hexdigest())
     now_utc = datetime.now(timezone.utc)
@@ -2631,8 +2691,23 @@ async def send_rss_to_channel(bot, cfg: dict, channel: str, msg: str, link: str,
     if temp_file:
         used_temp_files.append(temp_file)
     try:
+        if video_url:
+            caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in final_entities], max_offset=1024)
+            await bot.send_video(chat_id=channel, video=video_url, caption=final_text[:1024], caption_entities=caption_entities or None)
+            _RECENT_CHANNEL_PAYLOADS[dedupe_key] = now_utc
+            history.append((now_utc, final_text))
+            _RECENT_CHANNEL_TEXTS[str(channel)] = history[-30:]
+            logger.info("[VIDEO_PIPELINE_RESULT] stage=telegram_send result=video")
+            return
+
         if not image_url and not temp_file:
-            raise RuntimeError("RSS image is required, but no image was prepared")
+            caption_entities = _load_message_entities([_message_entity_to_dict(e) for e in final_entities], max_offset=4096)
+            await bot.send_message(chat_id=channel, text=final_text[:4096], entities=caption_entities or None)
+            _RECENT_CHANNEL_PAYLOADS[dedupe_key] = now_utc
+            history.append((now_utc, final_text))
+            _RECENT_CHANNEL_TEXTS[str(channel)] = history[-30:]
+            logger.info("[IMG_PIPELINE_RESULT] stage=telegram_send result=text_only")
+            return
         caption = final_text
         photo_candidates: list[Path | str] = []
         if temp_file:
@@ -9032,7 +9107,8 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             msg = llm_generate_post(user_id, cfg, title, summary, link, source_context, weak_context, social_source)
             image_url = extract_image_url_for_link(src, link)
             send_image_url, temp_file = await prepare_rss_image_for_sending(context.bot, cfg, user_id, image_url)
-            await send_rss_to_channel(context.bot, cfg, channel, msg, link, send_image_url, temp_file)
+            video_url = extract_video_url_for_link(src, link)
+            await send_rss_to_channel(context.bot, cfg, channel, msg, link, send_image_url, temp_file, video_url=video_url)
             _record_posted_rss_item(cfg, link, title, src, published)
             bump_daily_count(cfg, "rss")
             save_client(user_id, cfg)
@@ -9062,7 +9138,8 @@ async def fetchonce_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     image_url = extract_image_url_for_link(src, link)
     send_image_url, temp_file = await prepare_rss_image_for_sending(context.bot, cfg, user_id, image_url)
 
-    await send_rss_to_channel(context.bot, cfg, channel, msg, link, send_image_url, temp_file)
+    video_url = extract_video_url_for_link(src, link)
+    await send_rss_to_channel(context.bot, cfg, channel, msg, link, send_image_url, temp_file, video_url=video_url)
 
     _record_posted_rss_item(cfg, link, title, src, published)
     bump_daily_count(cfg, "rss")
@@ -9525,7 +9602,8 @@ async def autopost_loop(app: Application) -> None:
                     image_url = extract_image_url_for_link(src, link)
                     send_image_url, temp_file = await prepare_rss_image_for_sending(app.bot, cfg, user_id, image_url)
 
-                    await send_rss_to_channel(app.bot, cfg, channel, msg, link, send_image_url, temp_file)
+                    video_url = extract_video_url_for_link(src, link)
+                    await send_rss_to_channel(app.bot, cfg, channel, msg, link, send_image_url, temp_file, video_url=video_url)
 
                     _record_posted_rss_item(cfg, link, title, src, published)
                     bump_daily_count(cfg, "rss")

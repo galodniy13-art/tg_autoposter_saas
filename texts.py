@@ -4,16 +4,7 @@ TEXTS = {
         "menu_title": "Menu. Choose an action:",
         "mode_usage": "Usage: /mode rss OR /mode creator OR /mode both",
         "payment_offer":
-            "💳 Access pricing (USD/month):\n\n"
-            "RSS mode (account-wide daily limit shared across all your channels):\n"
-            "• 5 posts/day — $3/month\n"
-            "• 10 posts/day — $5/month\n"
-            "• 20 posts/day — $8/month\n• 40 posts/day — $12/month\n\n"
-            "Channel slots are purchased separately (how many channels you can connect).\n"
-            "To activate, message: @a_karaglan, @a_karaglanov\n\n"
-            "🔻 Discount for upfront payment\n\n"
-            "• 3 months — −10%\n"
-            "• 6 months — −20%",
+            "💳 For payment, message: @a_karaglan, @a_karaglanov",
         "btn_modes": "🧠 Modes",
         "btn_scheduling": "🕒 Scheduling",
         "modes_title": "🧠 Modes. Choose a mode settings section:",
@@ -22,27 +13,9 @@ TEXTS = {
         "creative_locked": "🔒 Creative mode is unavailable for your account.",
         "rss_locked": "🔒 RSS + AI mode is unavailable for your account.",
         "creative_paywall":
-            "Creative mode pricing (USD/month):\n"
-            "(Account-wide monthly post pool shared across all connected channels)\n"
-            "• 30/month — $5/month\n"
-            "• 60/month — $8/month\n"
-            "• 100/month — $13/month\n• 200/month — $20/month\n\n"
-            "Channel slots are managed separately.\n"
-            "To activate, message: @a_karaglan, @a_karaglanov\n\n"
-            "🔻 Discount for upfront payment\n\n"
-            "• 3 months — −10%\n"
-            "• 6 months — −20%",
+            "To activate Creative mode, message: @a_karaglan, @a_karaglanov",
         "rss_paywall":
-            "RSS mode pricing (USD/month):\n"
-            "(Account-wide daily limit shared across all connected channels)\n"
-            "• 5/day — $3/month\n"
-            "• 10/day — $5/month\n"
-            "• 20/day — $8/month\n• 40/day — $12/month\n\n"
-            "Channel slots are managed separately.\n"
-            "To activate, message: @a_karaglan, @a_karaglanov\n\n"
-            "🔻 Discount for upfront payment\n\n"
-            "• 3 months — −10%\n"
-            "• 6 months — −20%",
+            "To activate RSS mode, message: @a_karaglan, @a_karaglanov",
         "mode_set_rss": "✅ Mode set: 📰 RSS + AI",
         "mode_set_creator": "✅ Mode set: ✨ Creative",
         "btn_payment": "💳 Buy posting plan",
@@ -610,16 +583,7 @@ TEXTS = {
         "menu_title": "Меню. Выберите действие:",
         "mode_usage": "Использование: /mode rss ИЛИ /mode creator ИЛИ /mode both",
         "payment_offer":
-            "💳 Стоимость доступа (USD/месяц):\n\n"
-            "RSS-режим (дневной лимит на аккаунт, общий для всех каналов):\n"
-            "• 5 постов/день — $3/месяц\n"
-            "• 10 постов/день — $5/месяц\n"
-            "• 20 постов/день — $8/месяц\n• 40 постов/день — $12/месяц\n\n"
-            "Слоты каналов покупаются отдельно (сколько каналов можно подключить).\n"
-            "Для активации напишите: @a_karaglan, @a_karaglanov\n\n"
-            "🔻 Скидка при оплате сразу\n\n"
-            "• 3 месяца — −10%\n"
-            "• 6 месяцев — −20%",
+            "💳 По оплате напишите: @a_karaglan, @a_karaglanov",
         "btn_modes": "🧠 Режимы",
         "btn_scheduling": "🕒 Расписание",
         "modes_title": "🧠 Режимы. Выберите раздел настроек:",
@@ -628,27 +592,9 @@ TEXTS = {
         "creative_locked": "🔒 Режим Creative недоступен для вашего аккаунта.",
         "rss_locked": "🔒 Режим RSS + AI недоступен для вашего аккаунта.",
         "creative_paywall":
-            "Стоимость Creative-режима (USD/месяц):\n"
-            "(Месячный пул постов на аккаунт, общий для всех подключённых каналов)\n"
-            "• 30/месяц — $5/месяц\n"
-            "• 60/месяц — $8/месяц\n"
-            "• 100/месяц — $13/месяц\n• 200/месяц — $20/месяц\n\n"
-            "Слоты каналов управляются отдельно.\n"
-            "Для активации напишите: @a_karaglan, @a_karaglanov\n\n"
-            "🔻 Скидка при оплате сразу\n\n"
-            "• 3 месяца — −10%\n"
-            "• 6 месяцев — −20%",
+            "Для активации Creative-режима напишите: @a_karaglan, @a_karaglanov",
         "rss_paywall":
-            "Стоимость RSS-режима (USD/месяц):\n"
-            "(Дневной лимит на аккаунт, общий для всех подключённых каналов)\n"
-            "• 5/день — $3/месяц\n"
-            "• 10/день — $5/месяц\n"
-            "• 20/день — $8/месяц\n• 40/день — $12/месяц\n\n"
-            "Слоты каналов управляются отдельно.\n"
-            "Для активации напишите: @a_karaglan, @a_karaglanov\n\n"
-            "🔻 Скидка при оплате сразу\n\n"
-            "• 3 месяца — −10%\n"
-            "• 6 месяцев — −20%",
+            "Для активации RSS-режима напишите: @a_karaglan, @a_karaglanov",
         "mode_set_rss": "✅ Режим установлен: 📰 RSS + AI",
         "mode_set_creator": "✅ Режим установлен: ✨ Creative",
         "btn_payment": "💳 Купить пакет постов",
