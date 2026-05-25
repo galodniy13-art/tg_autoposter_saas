@@ -4109,12 +4109,17 @@ def build_asset_management_submenu(cfg: dict, mode: str, asset_type: str) -> Inl
 
 
 def post_format_assets_text(cfg: dict, mode: str) -> str:
-    template_key = f"{mode}_template_file_id"
     watermark_key = f"{mode}_watermark_file_id"
-    template_status = ui_text(cfg, "status_added") if cfg.get(template_key) else ui_text(cfg, "status_not_added")
     watermark_status = ui_text(cfg, "status_added") if cfg.get(watermark_key) else ui_text(cfg, "status_not_added")
-    bold_status = ui_text(cfg, "label_on") if bool(cfg.get(f"{mode}_bold_title", False)) else ui_text(cfg, "label_off")
     emoji_status = ui_text(cfg, "status_added") if (cfg.get(f"{mode}_custom_emojis_text") or "").strip() else ui_text(cfg, "status_not_added")
+    if mode == "rss":
+        return ui_text(cfg, "post_format_assets_info_rss").format(
+            watermark=watermark_status,
+            emoji=emoji_status,
+        )
+    template_key = f"{mode}_template_file_id"
+    template_status = ui_text(cfg, "status_added") if cfg.get(template_key) else ui_text(cfg, "status_not_added")
+    bold_status = ui_text(cfg, "label_on") if bool(cfg.get(f"{mode}_bold_title", False)) else ui_text(cfg, "label_off")
     return ui_text(cfg, "post_format_assets_info").format(
         template=template_status,
         watermark=watermark_status,
