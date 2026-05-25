@@ -610,6 +610,8 @@ def load_client(user_id: int) -> dict:
     before_normalize = json.dumps(cfg, ensure_ascii=False, sort_keys=True)
     for k, v in DEFAULT_CLIENT.items():
         cfg.setdefault(k, v)
+    if int(cfg.get("channel_slots", 0) or 0) <= 0:
+        cfg["channel_slots"] = 5
     if (cfg.get("mode") or "").strip().lower() == "creative":
         cfg["mode"] = "creator"
     normalize_channels(cfg)
@@ -5417,10 +5419,16 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     channels = get_saved_channels(cfg)
     channels_text = "\n".join([f"• {channel_display_name(cfg, ch)}" for ch in channels]) if channels else ui_text(cfg, "status_not_set")
     rss_daily = int(cfg.get("rss_daily_limit", 0) or 0)
-    creative_monthly = creative_monthly_limit(cfg)
-    creative_used = int(cfg.get("creative_monthly_count", 0) or 0)
-    creative_remaining = max(creative_monthly - creative_used, 0)
-    creative_period = cfg.get("creative_monthly_period") or _current_month_key()
+    daily_used = int(cfg.get("daily_count", 0) or 0)
+    rss_daily_remaining = max(rss_daily - daily_used, 0) if rss_daily > 0 else 0
+    months_left = "0"
+    if cfg.get("subscription_until"):
+        try:
+            until = datetime.strptime(str(cfg.get("subscription_until")), "%Y-%m-%d").date()
+            days_left = max((until - date.today()).days, 0)
+            months_left = f"{days_left / 30:.1f}"
+        except Exception:
+            months_left = "0"
 
     id_label = f"🆔 {ui_text(cfg, 'status_id')}:"
     id_value = str(user_id)
@@ -5429,35 +5437,17 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         f"{id_label}\n<code>{id_value}</code>\n\n"
         f"📺 {ui_text(cfg, 'status_channels')}:\n{channels_text}\n\n"
         f"📰 {ui_text(cfg, 'status_rss_daily')}: {rss_daily}\n"
-        f"✨ {ui_text(cfg, 'status_creative_monthly_pool')}: {creative_monthly}\n"
-        f"✨ {ui_text(cfg, 'status_creative_monthly_used')}: {creative_used}\n"
-        f"✨ {ui_text(cfg, 'status_creative_monthly_remaining')}: {creative_remaining}\n"
-        f"✨ {ui_text(cfg, 'status_creative_monthly_period')}: {creative_period}\n"
-        f"📅 {ui_text(cfg, 'status_valid_until')}: {sub}"
+        f"🧮 Posts left today: {rss_daily_remaining}\n"
+        f"📅 {ui_text(cfg, 'status_valid_until')}: {sub}\n"
+        f"🗓 Months left: {months_left}"
     )
-    raw_mode = (cfg.get("mode") or "rss").strip().lower()
-    active_mode = "creative" if raw_mode == "creator" else ("rss" if raw_mode == "rss" else "both")
-    if active_mode == "both":
-        live_summary = (
-            ui_text(cfg, "status_live_title")
-            + "\n"
-            + ui_text(cfg, "status_live_mode_section").format(mode="RSS")
-            + "\n"
-            + schedule_summary_for_mode(cfg, "rss")
-            + "\n\n"
-            + ui_text(cfg, "status_live_mode_section").format(mode="Creative")
-            + "\n"
-            + schedule_summary_for_mode(cfg, "creative")
-        )
-    else:
-        display_mode = "Creative" if active_mode == "creative" else "RSS"
-        live_summary = (
-            ui_text(cfg, "status_live_title")
-            + "\n"
-            + ui_text(cfg, "status_live_mode_section").format(mode=display_mode)
-            + "\n"
-            + schedule_summary_for_mode(cfg, active_mode)
-        )
+    live_summary = (
+        ui_text(cfg, "status_live_title")
+        + "\n"
+        + ui_text(cfg, "status_live_mode_section").format(mode="RSS")
+        + "\n"
+        + schedule_summary_for_mode(cfg, "rss")
+    )
     text += "\n\n" + live_summary
     markup = build_main_menu_clean(cfg)
 
@@ -8052,6 +8042,22 @@ async def setstyle_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await send_menu(update, cfg, "✅ Style updated (previous style replaced).")
 
 async def setchannel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if len(context.args) >= 2 and context.args[0].strip().isdigit() and context.args[1].strip().isdigit():
+        caller = update.effective_user.id
+        if not is_admin(caller):
+            await update.message.reply_text(tr(load_client(caller), "admin_only"))
+            return
+        uid = int(context.args[0].strip())
+        count = int(context.args[1].strip())
+        if count < 0 or count > 5000:
+            await update.message.reply_text("count range: 0..5000")
+            return
+        cfg_target = load_client(uid)
+        cfg_target["channel_slots"] = count
+        save_client(uid, cfg_target)
+        await update.message.reply_text(f"✅ User {uid} channel_slots set to {count}")
+        return
+
     user_id = update.effective_user.id
     cfg = load_client(user_id)
 
